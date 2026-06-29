@@ -21,7 +21,8 @@ import subprocess
 BEACON     = os.path.expanduser("~/.local/bin/agent-beacon")
 LOG_LINK   = os.path.expanduser("~/.gemini/antigravity-cli/cli.log")
 LOG_DIR    = os.path.expanduser("~/.gemini/antigravity-cli/log")
-IDLE_AFTER = 4.0   # seconds after last streamGenerateContent → done
+IDLE_AFTER    = 4.0    # seconds after last streamGenerateContent → done
+WAITING_AFTER = 20.0   # seconds in waiting with no API call → assume denied/ended → done
 
 # ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -47,10 +48,13 @@ def current_log_path() -> str:
 
 class GeminiWatcher:
     def __init__(self):
-        self._done_timer: threading.Timer | None = None
+        self._done_timer:    threading.Timer | None = None
+        self._waiting_timer: threading.Timer | None = None  # clears waiting if denied/idle
         self._lock = threading.Lock()
         self._current_log = ""
         self._log_fd = None
+
+    # ── done timer (fires after model goes silent) ────────────────────────────
 
     def _schedule_done(self):
         with self._lock:
@@ -67,15 +71,38 @@ class GeminiWatcher:
                 self._done_timer.cancel()
                 self._done_timer = None
 
+    # ── waiting timeout (fires if user denies / session ends silently) ────────
+
+    def _schedule_waiting_timeout(self):
+        """Start a fallback timer: if no API call within WAITING_AFTER seconds,
+        the user likely denied the request or the session ended without generating."""
+        with self._lock:
+            if self._waiting_timer:
+                self._waiting_timer.cancel()
+            self._waiting_timer = threading.Timer(
+                WAITING_AFTER, lambda: set_status("done", "已完成")
+            )
+            self._waiting_timer.start()
+
+    def _cancel_waiting_timeout(self):
+        with self._lock:
+            if self._waiting_timer:
+                self._waiting_timer.cancel()
+                self._waiting_timer = None
+
+    # ── line handler ──────────────────────────────────────────────────────────
+
     def _handle_line(self, line: str):
         # User submitted a message → start running
         if "Forwarding user message to conversation" in line:
             self._cancel_done()
+            self._cancel_waiting_timeout()
             set_status("running", "处理中")
             return
 
-        # Model generating → keep running, reset done timer
+        # Model generating → cancel waiting timeout, keep running, reset done timer
         if "streamGenerateContent" in line:
+            self._cancel_waiting_timeout()   # model responded after approval/denial
             set_status("running", "生成中")
             self._schedule_done()
             return
@@ -83,13 +110,15 @@ class GeminiWatcher:
         # Conversation stream stopped cleanly → done
         if "Stream completed for" in line or "Stopping conversation stream" in line:
             self._cancel_done()
+            self._cancel_waiting_timeout()
             set_status("done", "已完成")
             return
 
-        # Tool confirmation needed → waiting (exact log pattern from Antigravity)
+        # Tool confirmation needed → waiting + start fallback timeout
         if "Surfacing tool confirmation" in line:
             self._cancel_done()
             set_status("waiting", "等待工具确认")
+            self._schedule_waiting_timeout()   # clears red light if denied silently
             return
 
         # Fallback: other approval/waiting signals
@@ -97,6 +126,7 @@ class GeminiWatcher:
         if "waiting for user" in low or ("approval" in low and "auto" not in low):
             self._cancel_done()
             set_status("waiting", "等待审批")
+            self._schedule_waiting_timeout()
             return
 
     def _open_log(self, path: str):
