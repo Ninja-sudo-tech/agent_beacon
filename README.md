@@ -120,32 +120,43 @@ Claude Code 没有专门的 `PermissionRequest` hook 事件。`Notification` hoo
 ## Codex 集成
 
 **版本：** Codex CLI 0.142.2  
-**集成方式：** `~/.codex/config.toml` `notify` 字段 + `agent-codex` 包装器
+**集成方式：** `~/.codex/hooks.json`（主要）+ `config.toml notify`（兜底）
 
-### notify hook（自动）
-当 Codex 一轮对话结束时，会调用 `notify` 脚本并传入 `"turn-ended"` 参数：
-```
-notify → done
-```
-原始的 Codex Computer Use 客户端调用被保留（包装器先调用原始客户端）。
+### hooks.json（推荐，支持交互终端 + exec 模式）
 
-### agent-codex 包装器（CLI exec 模式）
-对于 `codex exec` 命令，使用 `agent-codex` 替代可获得更精细的状态：
-```bash
-agent-codex "帮我重构这段代码"
-agent-codex --interactive   # 启动 TUI 模式（手动状态）
-```
+Codex 支持与 Claude Code 相同的 hook 事件系统，通过 `~/.codex/hooks.json` 配置。
 
-事件检测：
-- 会话开始 → `running`
-- JSONL 中出现 `approval`、`waiting` 等关键词 → `waiting`（近似）
-- 正常退出 → `done`
-- 非零退出码 → `error`
+已实测确认 Codex 0.142.2 支持的事件：
+
+| 事件 | 触发条件 | 状态变化 |
+|------|----------|----------|
+| `UserPromptSubmit` | 用户在终端中提交提示词 | → `running` ✅ |
+| `PermissionRequest` | Codex 请求执行权限 | → `waiting` ✅ |
+| `Stop` | 会话结束 | → `done` ✅ |
+
+**注意：首次在 Codex 终端使用时，会出现 hook 信任确认对话框，需要选择信任才会激活。之后自动生效。**
+
+### config.toml notify（兜底机制）
+
+同时保留 `notify` 字段作为兜底，即使 hooks.json 未被信任，turn 结束时仍会触发 `done`：
+```
+turn-ended → done
+```
+原始 Codex Computer Use 客户端被封装保留。
+
+### codex exec 测试结果
+
+```
+codex exec --json "..." < /dev/null
+```
+时间线实测：
+- 提交提示 → `running`（约 2s 后 hook 触发）
+- 回答完成 → `done`（notify 触发）
 
 **Codex Desktop 状态：**  
-- ✅ `notify` hook 在 CLI 模式下生效（已通过配置文件确认）
-- ❓ Codex Desktop App 是否读取同一 config.toml 的 `notify` 字段需实测
-- 如果 Desktop App 不执行 notify hook，可手动使用 `agent-beacon set codex ...`
+- ✅ `notify` hook：config.toml 已更新，Desktop 应读取同一配置
+- ✅ `hooks.json`：Desktop App 与 CLI 共享 `~/.codex/`，应生效（需实测）
+- 首次使用需在 Desktop 中通过信任对话框
 
 ---
 
@@ -283,8 +294,8 @@ agent-beacon list  # codex 应该变为 done
 ## 已知限制
 
 1. **Claude Code PermissionRequest**：没有专用 hook，通过 `Notification` 事件关键词近似检测
-2. **Codex 交互模式**：TUI 模式下无法自动检测状态，需手动设置
-3. **Codex Desktop App**：未验证是否执行 config.toml notify hook（CLI 已验证）
+2. **Codex hooks 首次信任**：交互终端（`codex`）首次运行时需在对话框中手动信任 hooks
+3. **Codex Desktop App**：`hooks.json` 和 `notify` 均在 `~/.codex/` 下，Desktop 应读取，但需实测确认
 4. **Antigravity**：无任何自动集成接口，完全手动
 5. **Claude Code Desktop**：settings.json hooks 是否在 Desktop App 中生效未经实测验证
 6. **VS Code / JetBrains**：读取同一 settings.json，hooks 应生效但未验证

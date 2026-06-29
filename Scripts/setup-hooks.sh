@@ -98,110 +98,100 @@ fi
 echo ""
 
 # ──────────────────────────────────────────────
-# Codex hooks (notify field in config.toml)
+# Codex hooks — hooks.json (interactive terminal + exec)
 # ──────────────────────────────────────────────
 
 echo "--- Codex ($(codex --version 2>/dev/null || echo 'not found')) ---"
 
-if [ ! -f "$CODEX_CONFIG" ]; then
-    echo "    No config.toml found, skipping Codex notify hook."
+CODEX_HOME="$HOME/.codex"
+CODEX_HOOKS_JSON="$CODEX_HOME/hooks.json"
+BEACON_BIN="$(which agent-beacon 2>/dev/null || echo "$HOME/.local/bin/agent-beacon")"
+
+if [ ! -d "$CODEX_HOME" ]; then
+    echo "    ~/.codex not found, skipping Codex hooks."
 else
-    BACKUP_CODEX="$CODEX_CONFIG.agent-beacon-backup-$TIMESTAMP"
-    cp "$CODEX_CONFIG" "$BACKUP_CODEX"
-    echo "    Backup created: $BACKUP_CODEX"
-
-    # Check if notify is already pointing to our wrapper
-    if grep -q "agent-beacon-codex-notify" "$CODEX_CONFIG" 2>/dev/null; then
-        echo "    Codex notify hook already configured, skipped."
+    # --- hooks.json (lifecycle hooks: UserPromptSubmit, PermissionRequest, Stop) ---
+    if [ -f "$CODEX_HOOKS_JSON" ] && grep -q "agent-beacon" "$CODEX_HOOKS_JSON" 2>/dev/null; then
+        echo "    ~/.codex/hooks.json already configured, skipped."
     else
-        # Get current notify value and build wrapper script
-        CURRENT_NOTIFY=$(grep '^notify' "$CODEX_CONFIG" | head -1 || echo "")
-        WRAPPER_SCRIPT="/usr/local/bin/agent-beacon-codex-notify"
-
-        if [ -n "$CURRENT_NOTIFY" ]; then
-            # Extract the current notify array to preserve it
-            EXISTING_CMD=$(python3 -c "
-import re, sys
-line = '''$CURRENT_NOTIFY'''
-m = re.search(r'notify\s*=\s*(\[.*\])', line)
-if m:
-    print(m.group(1))
-" 2>/dev/null || echo "")
-            echo "    Current notify: $CURRENT_NOTIFY"
+        if [ -f "$CODEX_HOOKS_JSON" ]; then
+            cp "$CODEX_HOOKS_JSON" "$CODEX_HOOKS_JSON.agent-beacon-backup-$TIMESTAMP"
+            echo "    Backup: $CODEX_HOOKS_JSON.agent-beacon-backup-$TIMESTAMP"
         fi
 
-        # Write the codex notify wrapper
-        cat > "$WRAPPER_SCRIPT" << 'WRAPEOF'
+        cat > "$CODEX_HOOKS_JSON" << HOOKEOF
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [{"type": "command", "command": "$BEACON_BIN set codex running '处理中' 2>/dev/null; cat>/dev/null"}]
+      }
+    ],
+    "PermissionRequest": [
+      {
+        "hooks": [{"type": "command", "command": "$BEACON_BIN set codex waiting '等待权限确认' 2>/dev/null; cat>/dev/null"}]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [{"type": "command", "command": "$BEACON_BIN set codex done '已完成' 2>/dev/null; cat>/dev/null"}]
+      }
+    ]
+  }
+}
+HOOKEOF
+        echo "    Created ~/.codex/hooks.json"
+        echo "    Supported events: UserPromptSubmit→running, PermissionRequest→waiting, Stop→done"
+    fi
+
+    # --- config.toml notify (turn-ended fallback, preserves Computer Use client) ---
+    if [ -f "$CODEX_CONFIG" ]; then
+        BACKUP_CODEX="$CODEX_CONFIG.agent-beacon-backup-$TIMESTAMP"
+        [ ! -f "$BACKUP_CODEX" ] && cp "$CODEX_CONFIG" "$BACKUP_CODEX" && echo "    Backup: $BACKUP_CODEX"
+
+        WRAPPER_SCRIPT="$HOME/.local/bin/agent-beacon-codex-notify"
+        if grep -q "agent-beacon-codex-notify" "$CODEX_CONFIG" 2>/dev/null; then
+            echo "    config.toml notify already configured, skipped."
+        else
+            cat > "$WRAPPER_SCRIPT" << 'WRAPEOF'
 #!/bin/bash
-# Agent Beacon — Codex turn-ended notify wrapper
-# Called by Codex when a turn ends. First arg may be "turn-ended" or event type.
 EVENT="${1:-turn-ended}"
-BEACON="/usr/local/bin/agent-beacon"
-
-# Notify Agent Beacon
+BEACON="$HOME/.local/bin/agent-beacon"
 case "$EVENT" in
-    turn-ended|done|complete)
-        "$BEACON" set codex done "Turn ended" 2>/dev/null &
-        ;;
-    error|failed)
-        "$BEACON" set codex error "Codex error" 2>/dev/null &
-        ;;
-    *)
-        "$BEACON" set codex done "Notified: $EVENT" 2>/dev/null &
-        ;;
+    turn-ended|done|complete) "$BEACON" set codex done "Turn ended" 2>/dev/null & ;;
+    error|failed)             "$BEACON" set codex error "Codex error" 2>/dev/null & ;;
+    *)                        "$BEACON" set codex done "Notified: $EVENT" 2>/dev/null & ;;
 esac
-
-# Call original Codex Computer Use notify if it exists
 ORIGINAL="/Users/loutengda/.codex/computer-use/Codex Computer Use.app/Contents/SharedSupport/SkyComputerUseClient.app/Contents/MacOS/SkyComputerUseClient"
-if [ -f "$ORIGINAL" ]; then
-    "$ORIGINAL" "$@" 2>/dev/null &
-fi
+[ -f "$ORIGINAL" ] && "$ORIGINAL" "$@" 2>/dev/null &
 WRAPEOF
-        chmod +x "$WRAPPER_SCRIPT"
+            chmod +x "$WRAPPER_SCRIPT"
 
-        # Update config.toml notify field
-        python3 << PYEOF2
+            python3 << PYEOF2
 import re
-
 config_path = "$CODEX_CONFIG"
 wrapper = "$WRAPPER_SCRIPT"
-
 with open(config_path) as f:
     content = f.read()
-
 new_notify = f'notify = ["{wrapper}", "turn-ended"]'
-
-# Replace existing notify line or add new one
 if re.search(r'^notify\s*=', content, re.MULTILINE):
-    content = re.sub(r'^notify\s*=.*$', new_notify, content, flags=re.MULTILINE)
-    print("    Updated existing notify line")
+    content = re.sub(r'^notify\s*=.*\$', new_notify, content, flags=re.MULTILINE)
 else:
-    # Add after first non-comment line
-    lines = content.split('\n')
-    insert_idx = 0
-    for i, line in enumerate(lines):
-        if line.strip() and not line.strip().startswith('#'):
-            insert_idx = i
-            break
-    lines.insert(insert_idx, new_notify)
-    content = '\n'.join(lines)
-    print("    Added notify line")
-
+    content = new_notify + "\n" + content
 with open(config_path, 'w') as f:
     f.write(content)
-print("    Codex config.toml updated.")
+print("    config.toml notify updated (turn-ended fallback)")
 PYEOF2
-
+        fi
     fi
 fi
 
 echo ""
 echo "==> Hook setup complete."
 echo ""
-echo "  Claude Code hooks: UserPromptSubmit → running, Stop → done, Notification → waiting check"
-echo "  Codex hooks:       turn-ended → done (via notify wrapper)"
+echo "  Claude Code:  UserPromptSubmit→running  Stop→done  Notification→waiting(近似)"
+echo "  Codex CLI:    UserPromptSubmit→running  PermissionRequest→waiting  Stop→done"
+echo "  Codex notify: turn-ended→done (fallback)"
 echo ""
+echo "  ⚠️  Codex 终端首次运行时会出现 hook 信任确认对话框，请选择信任以启用自动状态更新。"
 echo "  Note: Changes take effect on the next Claude Code / Codex session."
-echo "  Note: Codex Desktop App and Claude Code Desktop may require separate validation."
-echo ""
-echo "  To verify: start a Claude Code session and check 'agent-beacon list'"
