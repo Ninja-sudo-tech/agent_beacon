@@ -5,11 +5,12 @@ Monitors ~/.gemini/antigravity-cli/cli.log for state transitions and
 updates the Gemini status in Agent Beacon.
 
 State detection from Antigravity CLI logs:
-  "Forwarding user message"      → running (user submitted prompt)
-  "streamGenerateContent"        → running (model generating, resets 8s timer)
-  "Surfacing tool confirmation"  → waiting (needs user approval for tool use)
-  (8s silence after last stream) → done   (response complete)
-  "Stopping conversation stream" → done   (conversation closed)
+  "Forwarding user message"               → running
+  "streamGenerateContent"                 → running (resets 4s done timer)
+  "Surfacing tool confirmation"           → waiting
+  "Responding to tool confirmation" true  → running (approved; stream will follow)
+  "Responding to tool confirmation" false → done   (denied; model goes silent)
+  "Stream completed" / "Stopping stream"  → done
 """
 
 import os
@@ -88,12 +89,23 @@ class GeminiWatcher:
             set_status("done", "已完成")
             return
 
-        # Tool confirmation dialog shown → waiting.
-        # Stays red until streamGenerateContent or stream-close fires.
-        # No timeout: user may take any amount of time to decide.
+        # Tool confirmation dialog shown → waiting
         if "Surfacing tool confirmation" in line:
             self._cancel_done()
             set_status("waiting", "等待工具确认")
+            return
+
+        # User responded to tool confirmation (approve OR deny)
+        # Log pattern: input_loop.go:452] Responding to tool confirmation: ... approved=true/false
+        if "Responding to tool confirmation" in line:
+            if "approved=true" in line:
+                # Tool will execute → streamGenerateContent follows shortly
+                set_status("running", "已批准，执行中")
+                self._schedule_done()
+            else:
+                # Denied → model goes completely silent, no streamGenerateContent
+                self._cancel_done()
+                set_status("done", "已完成")
             return
 
         # Fallback waiting signals
