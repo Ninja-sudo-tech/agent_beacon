@@ -1,0 +1,139 @@
+#!/usr/bin/env python3
+"""
+Agent Beacon — Antigravity/Gemini log watcher
+Monitors ~/.gemini/antigravity-cli/cli.log for state transitions and
+updates the Gemini status in Agent Beacon.
+
+State detection from Antigravity CLI logs:
+  "Forwarding user message"      → running (user submitted prompt)
+  "streamGenerateContent"        → running (model generating)
+  (8s silence after last stream) → done   (response complete)
+  "Stopping conversation stream" → done   (conversation closed)
+"""
+
+import os
+import sys
+import time
+import threading
+import subprocess
+
+BEACON     = os.path.expanduser("~/.local/bin/agent-beacon")
+LOG_LINK   = os.path.expanduser("~/.gemini/antigravity-cli/cli.log")
+LOG_DIR    = os.path.expanduser("~/.gemini/antigravity-cli/log")
+IDLE_AFTER = 8.0   # seconds after last streamGenerateContent → done
+
+# ── helpers ──────────────────────────────────────────────────────────────────
+
+def set_status(state: str, msg: str):
+    try:
+        subprocess.run(
+            [BEACON, "set", "antigravity", state, msg],
+            capture_output=True, timeout=3
+        )
+    except Exception:
+        pass
+
+def current_log_path() -> str:
+    """Follow symlink to the actual current log file."""
+    if os.path.islink(LOG_LINK):
+        target = os.readlink(LOG_LINK)
+        if not os.path.isabs(target):
+            target = os.path.join(os.path.dirname(LOG_LINK), target)
+        return target
+    return LOG_LINK
+
+# ── watcher ──────────────────────────────────────────────────────────────────
+
+class GeminiWatcher:
+    def __init__(self):
+        self._done_timer: threading.Timer | None = None
+        self._lock = threading.Lock()
+        self._current_log = ""
+        self._log_fd = None
+
+    def _schedule_done(self):
+        with self._lock:
+            if self._done_timer:
+                self._done_timer.cancel()
+            self._done_timer = threading.Timer(
+                IDLE_AFTER, lambda: set_status("done", "已完成")
+            )
+            self._done_timer.start()
+
+    def _cancel_done(self):
+        with self._lock:
+            if self._done_timer:
+                self._done_timer.cancel()
+                self._done_timer = None
+
+    def _handle_line(self, line: str):
+        # User submitted a message → start running
+        if "Forwarding user message to conversation" in line:
+            self._cancel_done()
+            set_status("running", "处理中")
+            return
+
+        # Model generating → keep running, reset done timer
+        if "streamGenerateContent" in line:
+            set_status("running", "生成中")
+            self._schedule_done()
+            return
+
+        # Conversation stream stopped cleanly → done
+        if "Stream completed for" in line or "Stopping conversation stream" in line:
+            self._cancel_done()
+            set_status("done", "已完成")
+            return
+
+        # Approval/waiting signals (tool use in agentic mode)
+        low = line.lower()
+        if "approval" in low or "waiting for user" in low or "permission" in low:
+            self._cancel_done()
+            set_status("waiting", "等待审批")
+            return
+
+    def _open_log(self, path: str):
+        if self._log_fd:
+            try:
+                self._log_fd.close()
+            except Exception:
+                pass
+        try:
+            self._log_fd = open(path, "r", errors="replace")
+            self._log_fd.seek(0, 2)   # start at end of file
+            self._current_log = path
+            return True
+        except OSError:
+            return False
+
+    def run(self):
+        path = current_log_path()
+        while not os.path.exists(path):
+            print(f"[agent-gemini-watcher] Waiting for log: {path}", flush=True)
+            time.sleep(5)
+            path = current_log_path()
+
+        self._open_log(path)
+        print(f"[agent-gemini-watcher] Watching: {path}", flush=True)
+
+        while True:
+            # Detect log rotation (Antigravity restarted)
+            new_path = current_log_path()
+            if new_path != self._current_log and os.path.exists(new_path):
+                print(f"[agent-gemini-watcher] Log rotated → {new_path}", flush=True)
+                self._open_log(new_path)
+                # Antigravity restarted = back to idle
+                set_status("idle", "")
+
+            if self._log_fd:
+                for line in self._log_fd:
+                    self._handle_line(line)
+
+            time.sleep(0.25)
+
+if __name__ == "__main__":
+    watcher = GeminiWatcher()
+    try:
+        watcher.run()
+    except KeyboardInterrupt:
+        sys.exit(0)
