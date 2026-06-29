@@ -6,7 +6,8 @@ updates the Gemini status in Agent Beacon.
 
 State detection from Antigravity CLI logs:
   "Forwarding user message"      → running (user submitted prompt)
-  "streamGenerateContent"        → running (model generating)
+  "streamGenerateContent"        → running (model generating, resets 8s timer)
+  "Surfacing tool confirmation"  → waiting (needs user approval for tool use)
   (8s silence after last stream) → done   (response complete)
   "Stopping conversation stream" → done   (conversation closed)
 """
@@ -85,9 +86,15 @@ class GeminiWatcher:
             set_status("done", "已完成")
             return
 
-        # Approval/waiting signals (tool use in agentic mode)
+        # Tool confirmation needed → waiting (exact log pattern from Antigravity)
+        if "Surfacing tool confirmation" in line:
+            self._cancel_done()
+            set_status("waiting", "等待工具确认")
+            return
+
+        # Fallback: other approval/waiting signals
         low = line.lower()
-        if "approval" in low or "waiting for user" in low or "permission" in low:
+        if "waiting for user" in low or ("approval" in low and "auto" not in low):
             self._cancel_done()
             set_status("waiting", "等待审批")
             return

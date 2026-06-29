@@ -51,7 +51,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private static let agentLabel: [String: String] = [
         "claude":      "Claude",
         "codex":       "Codex",
-        "antigravity": "Gemini"
+        "antigravity": "AGY"
     ]
 
     private func updateMenuBarTitle() {
