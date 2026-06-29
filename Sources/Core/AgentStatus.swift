@@ -84,9 +84,9 @@ public struct AgentStatus: Codable, Equatable {
 public let knownAgents: [String] = ["claude", "codex", "antigravity"]
 
 public let agentDisplayNames: [String: String] = [
-    "claude":      "Claude Code",
+    "claude":      "Claude",
     "codex":       "Codex",
-    "antigravity": "Antigravity"
+    "antigravity": "Gemini"
 ]
 
 public let agentAppBundleIDs: [String: String] = [
