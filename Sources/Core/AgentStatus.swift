@@ -86,7 +86,7 @@ public let knownAgents: [String] = ["claude", "codex", "antigravity"]
 public let agentDisplayNames: [String: String] = [
     "claude":      "Claude",
     "codex":       "Codex",
-    "antigravity": "Gemini"
+    "antigravity": "Antigravity"
 ]
 
 public let agentAppBundleIDs: [String: String] = [
