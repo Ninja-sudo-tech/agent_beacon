@@ -151,6 +151,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         floatItem.state  = prefs.showFloating ? .on : .off
         menu.addItem(floatItem)
 
+        let labelItem = NSMenuItem(title: "    › 显示标签", action: #selector(toggleFloatingLabels), keyEquivalent: "")
+        labelItem.target    = self
+        labelItem.state     = prefs.showFloatingLabels ? .on : .off
+        labelItem.isEnabled = prefs.showFloating
+        menu.addItem(labelItem)
+
         menu.addItem(.separator())
 
         // done auto-transition
@@ -306,7 +312,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func toggleFloating() {
         let prefs = Preferences.shared
         let next = !prefs.showFloating
-        // Safety: can't hide both at the same time
         if !next && !prefs.showMenuBar {
             prefs.showMenuBar = true
             applyMenuBarVisibility()
@@ -315,5 +320,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         prefs.showFloating = next
         if next { floating.show(); floating.updateStatuses(statuses) }
         else     { floating.hide() }
+    }
+
+    @objc private func toggleFloatingLabels() {
+        let prefs = Preferences.shared
+        prefs.showFloatingLabels = !prefs.showFloatingLabels
+        floating.applyLabelVisibility()
     }
 }

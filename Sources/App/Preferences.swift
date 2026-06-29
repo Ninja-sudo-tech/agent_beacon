@@ -28,4 +28,13 @@ final class Preferences {
         get { defaults.bool(forKey: "\(suite).showFloating") }
         set { defaults.set(newValue, forKey: "\(suite).showFloating") }
     }
+
+    /// Show agent name labels beside circles in floating window. Default: true.
+    var showFloatingLabels: Bool {
+        get {
+            if defaults.object(forKey: "\(suite).showFloatingLabels") == nil { return true }
+            return defaults.bool(forKey: "\(suite).showFloatingLabels")
+        }
+        set { defaults.set(newValue, forKey: "\(suite).showFloatingLabels") }
+    }
 }
