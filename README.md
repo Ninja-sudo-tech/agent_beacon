@@ -99,16 +99,16 @@ agent-beacon list
 **版本：** Claude Code 2.1.133  
 **集成方式：** `~/.claude/settings.json` hooks
 
-已配置以下 hooks：
+已配置以下 hooks（Claude Code 2.1.133 实测确认支持）：
 
 | 事件 | 触发条件 | 状态变化 |
 |------|----------|----------|
-| `UserPromptSubmit` | 用户提交提示词 | → `running` |
-| `Stop` | 会话结束 | → `done` |
-| `Notification` | 收到通知（检查关键词）| 可能 → `waiting` |
+| `UserPromptSubmit` | 用户提交提示词 | → `running` ✅ |
+| `PermissionRequest` | Claude 需要权限执行工具时弹出确认框 | → `waiting` ✅ |
+| `Stop` | 会话结束 | → `done` ✅ |
+| `Notification` | 其他通知（兜底，检查关键词） | 可能 → `waiting` |
 
-**等待状态局限：**  
-Claude Code 没有专门的 `PermissionRequest` hook 事件。`Notification` hook 会检查消息中是否包含 "permission"、"approval"、"waiting" 等关键词来判断是否进入 `waiting` 状态，这是**近似实现**，非 100% 准确。
+**`PermissionRequest` 是 Claude Code 的原生专用 hook**，当 Claude 需要执行一个未预授权的工具（如 Bash 命令）时精确触发，无需关键词猜测。运行中（🟡）→ 等待权限（🔴）的转换现在准确可靠。
 
 **IDE 集成状态：**  
 - ✅ Claude Code CLI：hooks 通过 settings.json 生效

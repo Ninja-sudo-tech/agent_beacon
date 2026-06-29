@@ -26,8 +26,8 @@ else
 import json, sys
 
 path = "$CLAUDE_SETTINGS"
-beacon_cli = "/usr/local/bin/agent-beacon"
-notify_hook = "/usr/local/bin/agent-beacon-claude-notify"
+beacon_cli = "$(which agent-beacon 2>/dev/null || echo '$HOME/.local/bin/agent-beacon')"
+notify_hook = "$(which agent-beacon-claude-notify 2>/dev/null || echo '$HOME/.local/bin/agent-beacon-claude-notify')"
 
 with open(path) as f:
     settings = json.load(f)
@@ -35,56 +35,31 @@ with open(path) as f:
 if "hooks" not in settings:
     settings["hooks"] = {}
 
-# --- UserPromptSubmit → running ---
-if "UserPromptSubmit" not in settings["hooks"]:
-    settings["hooks"]["UserPromptSubmit"] = []
+def add_hook(event, command_str, label):
+    lst = settings["hooks"].setdefault(event, [])
+    if not any("agent-beacon" in str(h) for h in lst):
+        lst.append({"hooks": [{"type": "command", "command": command_str}]})
+        print(f"    Added {event} hook ({label})")
+    else:
+        print(f"    {event} hook already present, skipped")
 
-existing_ups = settings["hooks"]["UserPromptSubmit"]
-beacon_hook_ups = {
-    "hooks": [{
-        "type": "command",
-        "command": f"{beacon_cli} set claude running '处理中' 2>/dev/null; cat > /dev/null"
-    }]
-}
-if not any("agent-beacon" in str(h) for h in existing_ups):
-    existing_ups.append(beacon_hook_ups)
-    print("    Added UserPromptSubmit hook")
-else:
-    print("    UserPromptSubmit hook already present, skipped")
+# running when user submits a prompt
+add_hook("UserPromptSubmit",
+         f"{beacon_cli} set claude running '处理中' 2>/dev/null; cat>/dev/null",
+         "running")
 
-# --- Stop → done ---
-if "Stop" not in settings["hooks"]:
-    settings["hooks"]["Stop"] = []
+# waiting when Claude needs permission to run a tool (dedicated hook event)
+add_hook("PermissionRequest",
+         f"{beacon_cli} set claude waiting '等待权限确认' 2>/dev/null; cat>/dev/null",
+         "waiting — permission dialog")
 
-existing_stop = settings["hooks"]["Stop"]
-beacon_hook_stop = {
-    "hooks": [{
-        "type": "command",
-        "command": f"{beacon_cli} set claude done '已完成' 2>/dev/null; cat > /dev/null"
-    }]
-}
-if not any("agent-beacon" in str(h) for h in existing_stop):
-    existing_stop.append(beacon_hook_stop)
-    print("    Added Stop hook")
-else:
-    print("    Stop hook already present, skipped")
+# done when session stops
+add_hook("Stop",
+         f"{beacon_cli} set claude done '已完成' 2>/dev/null; cat>/dev/null",
+         "done")
 
-# --- Notification → waiting (permission check) ---
-if "Notification" not in settings["hooks"]:
-    settings["hooks"]["Notification"] = []
-
-existing_notif = settings["hooks"]["Notification"]
-beacon_hook_notif = {
-    "hooks": [{
-        "type": "command",
-        "command": f"{notify_hook}"
-    }]
-}
-if not any("agent-beacon" in str(h) for h in existing_notif):
-    existing_notif.append(beacon_hook_notif)
-    print("    Added Notification hook")
-else:
-    print("    Notification hook already present, skipped")
+# notification fallback (catches other cases where Claude is waiting for user)
+add_hook("Notification", notify_hook, "notification/waiting fallback")
 
 with open(path, "w") as f:
     json.dump(settings, f, indent=2, ensure_ascii=False)

@@ -47,9 +47,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    // Short label shown beside each traffic-light dot: C / X / G
+    private static let agentLabel: [String: String] = [
+        "claude":      "C",
+        "codex":       "X",
+        "antigravity": "G"
+    ]
+
     private func updateMenuBarTitle() {
-        let dominant = dominantState(from: statuses)
-        statusItem.button?.title = " \(dominant.menuBarEmoji) Agents"
+        // Show one traffic-light indicator per agent in fixed order
+        let indicators = knownAgents.map { agent -> String in
+            let status = statuses.first(where: { $0.agent == agent })
+            let state  = status?.state ?? .idle
+            let label  = Self.agentLabel[agent] ?? agent.prefix(1).uppercased()
+            return "\(state.menuBarEmoji)\(label)"
+        }
+        statusItem.button?.title = " " + indicators.joined(separator: " ")
     }
 
     // MARK: - Done Auto-Transition
