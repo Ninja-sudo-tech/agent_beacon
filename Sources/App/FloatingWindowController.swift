@@ -1,73 +1,58 @@
 import AppKit
 import Core
 
-// MARK: - Background view
-// Handles move + resize + right-click, and draws the resize grip indicator.
+// MARK: - Size presets
+
+struct FloatingSizePreset {
+    let key:      String
+    let label:    String
+    let d:        CGFloat   // circle diameter
+    let labelW:   CGFloat   // label column width
+
+    private static let pad:      CGFloat = 9
+    private static let gap:      CGFloat = 8
+    private static let labelGap: CGFloat = 10
+
+    var height: CGFloat { d * 3 + Self.gap * 2 + Self.pad * 2 }
+    var widthWithLabels: CGFloat { Self.pad + d + Self.labelGap + labelW + Self.pad }
+    var widthNoLabels:   CGFloat { Self.pad + d + Self.pad }
+    var fontSize: CGFloat { max(9, d * 0.38) }
+
+    static let small  = FloatingSizePreset(key: "small",  label: "小", d: 22, labelW: 44)
+    static let medium = FloatingSizePreset(key: "medium", label: "中", d: 34, labelW: 62)
+    static let large  = FloatingSizePreset(key: "large",  label: "大", d: 50, labelW: 88)
+    static let all    = [small, medium, large]
+
+    static func forKey(_ key: String) -> FloatingSizePreset {
+        all.first(where: { $0.key == key }) ?? .medium
+    }
+}
+
+// MARK: - Background view (move + right-click only)
 
 private final class FloatingBackground: NSView {
-
     var onMove:       ((_ dx: CGFloat, _ dy: CGFloat) -> Void)?
-    var onResize:     ((_ dx: CGFloat, _ dy: CGFloat) -> Void)?
     var onRightClick: ((_ screenPt: NSPoint) -> Void)?
 
-    private static let gripSize: CGFloat = 18
-
-    private enum Mode { case none, move, resize }
-    private var mode: Mode = .none
     private var startScreen: NSPoint = .zero
-
-    private var gripRect: NSRect {
-        NSRect(x: bounds.maxX - Self.gripSize, y: bounds.minY,
-               width: Self.gripSize, height: Self.gripSize)
-    }
-
-    override func draw(_ dirtyRect: NSRect) {
-        super.draw(dirtyRect)
-        let r = gripRect
-        let path = NSBezierPath()
-        for i in 0..<3 {
-            let off = CGFloat(i) * 3.8 + 1.5
-            path.move(to: NSPoint(x: r.maxX - 1.5,       y: r.minY + off))
-            path.line(to: NSPoint(x: r.maxX - 1.5 - off, y: r.minY + 1.5))
-        }
-        NSColor.white.withAlphaComponent(0.30).setStroke()
-        path.lineWidth = 1
-        path.stroke()
-    }
 
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
     override func mouseDown(with event: NSEvent) {
         guard let w = window else { return }
-        let loc = event.locationInWindow
-        mode = gripRect.contains(loc) ? .resize : .move
-        startScreen = w.convertPoint(toScreen: loc)
+        startScreen = w.convertPoint(toScreen: event.locationInWindow)
     }
 
     override func mouseDragged(with event: NSEvent) {
         guard let w = window else { return }
         let cur = w.convertPoint(toScreen: event.locationInWindow)
-        let dx = cur.x - startScreen.x
-        let dy = cur.y - startScreen.y
+        onMove?(cur.x - startScreen.x, cur.y - startScreen.y)
         startScreen = cur
-        switch mode {
-        case .move:   onMove?(dx, dy)
-        case .resize: onResize?(dx, dy)
-        case .none:   break
-        }
     }
-
-    override func mouseUp(with event: NSEvent) { mode = .none }
 
     override func rightMouseDown(with event: NSEvent) {
         guard let w = window else { return }
         onRightClick?(w.convertPoint(toScreen: event.locationInWindow))
-    }
-
-    override func resetCursorRects() {
-        addCursorRect(gripRect, cursor: .crosshair)
-        let rest = NSRect(x: 0, y: 0, width: bounds.width - Self.gripSize, height: bounds.height)
-        addCursorRect(rest, cursor: .openHand)
     }
 }
 
@@ -75,44 +60,24 @@ private final class FloatingBackground: NSView {
 
 final class FloatingWindowController: NSObject {
 
-    // ── Constants ────────────────────────────────────────────────────
     private static let pad:      CGFloat = 9
     private static let gap:      CGFloat = 8
-    private static let labelGap: CGFloat = 10   // circle → label
-    private static let labelMinW:CGFloat = 58   // min label column width
-    private static let gripSz:   CGFloat = 18   // resize grip area
-    private static let minD:     CGFloat = 18
-    private static let maxD:     CGFloat = 90
-    private static let defaultD: CGFloat = 36
+    private static let labelGap: CGFloat = 10
 
-    /// Minimum window width when labels hidden — circle at left + room for grip with no overlap.
-    private static func narrowWidth(d: CGFloat) -> CGFloat {
-        pad + d + pad + gripSz   // circle | buffer | grip
-    }
-
-    private static func defaultSize(labels: Bool) -> NSSize {
-        let d = defaultD
-        let h = d * 3 + gap * 2 + pad * 2
-        let w = labels ? pad + d + labelGap + labelMinW + pad
-                       : narrowWidth(d: d)
-        return NSSize(width: w, height: h)
-    }
-
-    // ── State ────────────────────────────────────────────────────────
+    // ── State ──────────────────────────────────────────────────────
     private(set) var panel: NSPanel?
     private var bgView:  FloatingBackground?
-    private var circles: [NSView]      = []
-    private var lblViews:[NSTextField] = []
+    private var circles: [NSView]       = []
+    private var lblViews:[NSTextField]  = []
 
     var onShowMenu: ((NSPoint) -> Void)?
 
     private let defaults = UserDefaults.standard
     private let kX = "ab.float.x", kY = "ab.float.y"
-    private let kW = "ab.float.w", kH = "ab.float.h"
 
     var isVisible: Bool { panel?.isVisible ?? false }
 
-    // ── Public API ───────────────────────────────────────────────────
+    // ── Public API ─────────────────────────────────────────────────
 
     func show() {
         if panel == nil { buildPanel() }
@@ -123,26 +88,26 @@ final class FloatingWindowController: NSObject {
         panel?.orderOut(nil)
     }
 
-    /// Call after toggling showFloatingLabels; resizes window width as needed.
-    func applyLabelVisibility() {
+    /// Apply current size preset and label visibility — call after any pref change.
+    func applyCurrentSize() {
         guard let p = panel else { return }
-        let showL = Preferences.shared.showFloatingLabels
-        let d = diameter(for: p.frame.height)
+        let preset = FloatingSizePreset.forKey(Preferences.shared.floatingSize)
+        let showL  = Preferences.shared.showFloatingLabels
+        let sz = NSSize(
+            width:  showL ? preset.widthWithLabels : preset.widthNoLabels,
+            height: preset.height
+        )
         var f = p.frame
-        if showL {
-            let needed = Self.pad + d + Self.labelGap + Self.labelMinW + Self.pad
-            if f.width < needed {
-                f.size.width = needed
-                p.setFrame(f, display: true)
-            }
-        } else {
-            // Keep grip zone clear of circles: pad + d + pad + gripSz
-            f.size.width = Self.narrowWidth(d: d)
-            p.setFrame(f, display: true)
-        }
+        // Anchor top-left: keep top edge fixed as size changes
+        f.origin.y += f.height - sz.height
+        f.size = sz
+        p.setFrame(f, display: true)
         relayout()
         persist()
     }
+
+    /// Convenience — call when label toggle changes.
+    func applyLabelVisibility() { applyCurrentSize() }
 
     func updateStatuses(_ statuses: [AgentStatus]) {
         guard let p = panel, p.isVisible else { return }
@@ -158,11 +123,15 @@ final class FloatingWindowController: NSObject {
         }
     }
 
-    // ── Build ────────────────────────────────────────────────────────
+    // ── Build ───────────────────────────────────────────────────────
 
     private func buildPanel() {
+        let preset = FloatingSizePreset.forKey(Preferences.shared.floatingSize)
         let showL  = Preferences.shared.showFloatingLabels
-        let sz     = savedSize() ?? Self.defaultSize(labels: showL)
+        let sz     = NSSize(
+            width:  showL ? preset.widthWithLabels : preset.widthNoLabels,
+            height: preset.height
+        )
         let origin = savedOrigin() ?? defaultOrigin(sz)
 
         let p = NSPanel(
@@ -181,7 +150,6 @@ final class FloatingWindowController: NSObject {
             self, selector: #selector(didMove(_:)),
             name: NSWindow.didMoveNotification, object: p)
 
-        // Background
         let bg = FloatingBackground(frame: p.contentView!.bounds)
         bg.wantsLayer = true
         bg.layer?.backgroundColor = NSColor(white: 0.05, alpha: 0.60).cgColor
@@ -195,13 +163,12 @@ final class FloatingWindowController: NSObject {
                                      y: w.frame.origin.y + dy))
             self?.persist()
         }
-        bg.onResize = { [weak self] dx, dy in self?.handleResize(dx: dx, dy: dy) }
         bg.onRightClick = { [weak self] pt in self?.onShowMenu?(pt) }
 
-        // Circles (subviews of bg)
+        // Circles + labels
+        let names = ["Claude", "Codex", "Antigr"]
         circles  = []
         lblViews = []
-        let names = ["Claude", "Codex", "Antigr"]
 
         for i in 0..<3 {
             let circle = NSView()
@@ -215,7 +182,6 @@ final class FloatingWindowController: NSObject {
             bg.addSubview(circle)
             circles.append(circle)
 
-            // Label to the right of the circle (sibling, not child)
             let lbl = NSTextField(labelWithString: names[i])
             lbl.alignment       = .left
             lbl.isBezeled       = false
@@ -232,32 +198,28 @@ final class FloatingWindowController: NSObject {
         relayout()
     }
 
-    // ── Layout ───────────────────────────────────────────────────────
+    // ── Layout ──────────────────────────────────────────────────────
 
     private func relayout() {
         guard let p = panel, let bg = bgView else { return }
         let w = p.frame.width
         let h = p.frame.height
 
-        let d    = diameter(for: h)
-        let gap  = Self.gap
-        let pad  = Self.pad
-        let lgap = Self.labelGap
-        let showL = Preferences.shared.showFloatingLabels
+        let preset = FloatingSizePreset.forKey(Preferences.shared.floatingSize)
+        let showL  = Preferences.shared.showFloatingLabels
+        let d      = preset.d
+        let gap    = Self.gap
+        let pad    = Self.pad
+        let lgap   = Self.labelGap
+        let font   = NSFont.systemFont(ofSize: preset.fontSize, weight: .semibold)
 
-        // Background pill — adapts corner radius
         bg.frame = NSRect(x: 0, y: 0, width: w, height: h)
-        bg.layer?.cornerRadius = showL ? 12 : min(w, h) / 2.2
-        bg.needsDisplay = true
-
-        // Font scales with circle size
-        let fontSize = max(9, d * 0.38)
-        let font     = NSFont.systemFont(ofSize: fontSize, weight: .semibold)
+        // Pill when narrow, rounded rect when labels visible
+        bg.layer?.cornerRadius = showL ? 12 : (d / 2 + pad)
 
         let totalH = d * 3 + gap * 2
         let startY = (h - totalH) / 2
-        // Circles always at left pad — grip is reserved at the far right
-        let circleX: CGFloat = pad
+        let circleX = pad   // always left-aligned
 
         let labelX = pad + d + lgap
         let labelW = max(0, w - labelX - pad)
@@ -266,11 +228,9 @@ final class FloatingWindowController: NSObject {
             guard i < circles.count, i < lblViews.count else { break }
             let cy = startY + CGFloat(2 - i) * (d + gap)
 
-            // Circle
             circles[i].frame = NSRect(x: circleX, y: cy, width: d, height: d)
             circles[i].layer?.cornerRadius = d / 2
 
-            // Label — vertically centered with circle using measured text height
             let textH = (lblViews[i].stringValue as NSString)
                 .size(withAttributes: [.font: font]).height
             let labelY = cy + (d - textH) / 2
@@ -281,44 +241,15 @@ final class FloatingWindowController: NSObject {
         }
     }
 
-    // ── Resize ───────────────────────────────────────────────────────
-
-    private func handleResize(dx: CGFloat, dy: CGFloat) {
-        guard let p = panel else { return }
-        let showL = Preferences.shared.showFloatingLabels
-        let minH  = Self.minD * 3 + Self.gap * 2 + Self.pad * 2
-        let minW  = showL
-            ? Self.pad + Self.minD + Self.labelGap + 30 + Self.pad
-            : Self.narrowWidth(d: Self.minD)
-
-        let f    = p.frame
-        let newW = max(minW, f.width  + dx)
-        let newH = max(minH, f.height - dy)
-        let newY = f.origin.y + (f.height - newH)
-
-        p.setFrame(NSRect(x: f.origin.x, y: newY, width: newW, height: newH), display: true)
-        relayout()
-        persist()
-    }
-
-    // ── Persistence ──────────────────────────────────────────────────
+    // ── Persistence ─────────────────────────────────────────────────
 
     private func persist() {
         guard let p = panel else { return }
         defaults.set(Double(p.frame.origin.x), forKey: kX)
         defaults.set(Double(p.frame.origin.y), forKey: kY)
-        defaults.set(Double(p.frame.width),    forKey: kW)
-        defaults.set(Double(p.frame.height),   forKey: kH)
     }
 
     @objc private func didMove(_ n: Notification) { persist() }
-
-    private func savedSize() -> NSSize? {
-        let w = defaults.double(forKey: kW)
-        let h = defaults.double(forKey: kH)
-        guard w > 10, h > 10 else { return nil }
-        return NSSize(width: w, height: h)
-    }
 
     private func savedOrigin() -> NSPoint? {
         let x = defaults.double(forKey: kX)
@@ -334,12 +265,7 @@ final class FloatingWindowController: NSObject {
         return NSPoint(x: sf.maxX - size.width - 28, y: sf.maxY - size.height - 28)
     }
 
-    // ── Helpers ──────────────────────────────────────────────────────
-
-    private func diameter(for windowHeight: CGFloat) -> CGFloat {
-        let avail = windowHeight - Self.pad * 2 - Self.gap * 2
-        return max(Self.minD, min(Self.maxD, avail / 3))
-    }
+    // ── Colors ──────────────────────────────────────────────────────
 
     private func circleColor(_ state: AgentState) -> NSColor {
         switch state {

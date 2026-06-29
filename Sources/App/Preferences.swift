@@ -29,6 +29,12 @@ final class Preferences {
         set { defaults.set(newValue, forKey: "\(suite).showFloating") }
     }
 
+    /// Floating window size preset: "small" | "medium" | "large". Default: "medium".
+    var floatingSize: String {
+        get { defaults.string(forKey: "\(suite).floatingSize") ?? "medium" }
+        set { defaults.set(newValue, forKey: "\(suite).floatingSize") }
+    }
+
     /// Show agent name labels beside circles in floating window. Default: true.
     var showFloatingLabels: Bool {
         get {

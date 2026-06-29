@@ -65,7 +65,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private static let agentLabel: [String: String] = [
         "claude":      "Claude",
         "codex":       "Codex",
-        "antigravity": "AGY"
+        "antigravity": "Antigr"
     ]
 
     private func updateMenuBarTitle() {
@@ -159,11 +159,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         floatItem.state  = prefs.showFloating ? .on : .off
         menu.addItem(floatItem)
 
+        // Label toggle
         let labelItem = NSMenuItem(title: "    › 显示标签", action: #selector(toggleFloatingLabels), keyEquivalent: "")
         labelItem.target    = self
         labelItem.state     = prefs.showFloatingLabels ? .on : .off
         labelItem.isEnabled = prefs.showFloating
         menu.addItem(labelItem)
+
+        // Size presets
+        for preset in FloatingSizePreset.all {
+            let item = NSMenuItem(
+                title: "    › 大小: \(preset.label)",
+                action: #selector(setFloatingSize(_:)),
+                keyEquivalent: ""
+            )
+            item.target           = self
+            item.representedObject = preset.key
+            item.state            = prefs.floatingSize == preset.key ? .on : .off
+            item.isEnabled        = prefs.showFloating
+            menu.addItem(item)
+        }
 
         menu.addItem(.separator())
 
@@ -331,8 +346,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func toggleFloatingLabels() {
-        let prefs = Preferences.shared
-        prefs.showFloatingLabels = !prefs.showFloatingLabels
+        Preferences.shared.showFloatingLabels = !Preferences.shared.showFloatingLabels
         floating.applyLabelVisibility()
+    }
+
+    @objc private func setFloatingSize(_ sender: NSMenuItem) {
+        guard let key = sender.representedObject as? String else { return }
+        Preferences.shared.floatingSize = key
+        floating.applyCurrentSize()
     }
 }
