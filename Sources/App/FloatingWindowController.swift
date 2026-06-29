@@ -158,7 +158,7 @@ final class FloatingWindowController: NSObject {
         bg = background
 
         // circles + labels
-        let agentNames = ["Claude", "Codex", "AGY"]
+        let agentNames = ["C", "X", "A"]
         circles = []
         lblViews = []
         for i in 0..<3 {

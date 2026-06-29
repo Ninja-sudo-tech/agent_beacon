@@ -21,7 +21,7 @@ import subprocess
 BEACON     = os.path.expanduser("~/.local/bin/agent-beacon")
 LOG_LINK   = os.path.expanduser("~/.gemini/antigravity-cli/cli.log")
 LOG_DIR    = os.path.expanduser("~/.gemini/antigravity-cli/log")
-IDLE_AFTER = 8.0   # seconds after last streamGenerateContent → done
+IDLE_AFTER = 4.0   # seconds after last streamGenerateContent → done
 
 # ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -136,7 +136,7 @@ class GeminiWatcher:
                 for line in self._log_fd:
                     self._handle_line(line)
 
-            time.sleep(0.25)
+            time.sleep(0.05)
 
 if __name__ == "__main__":
     watcher = GeminiWatcher()
