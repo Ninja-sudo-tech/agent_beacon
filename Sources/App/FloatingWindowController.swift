@@ -80,15 +80,21 @@ final class FloatingWindowController: NSObject {
     private static let gap:      CGFloat = 8
     private static let labelGap: CGFloat = 10   // circle → label
     private static let labelMinW:CGFloat = 58   // min label column width
+    private static let gripSz:   CGFloat = 18   // resize grip area
     private static let minD:     CGFloat = 18
     private static let maxD:     CGFloat = 90
     private static let defaultD: CGFloat = 36
+
+    /// Minimum window width when labels hidden — circle at left + room for grip with no overlap.
+    private static func narrowWidth(d: CGFloat) -> CGFloat {
+        pad + d + pad + gripSz   // circle | buffer | grip
+    }
 
     private static func defaultSize(labels: Bool) -> NSSize {
         let d = defaultD
         let h = d * 3 + gap * 2 + pad * 2
         let w = labels ? pad + d + labelGap + labelMinW + pad
-                       : pad + d + pad
+                       : narrowWidth(d: d)
         return NSSize(width: w, height: h)
     }
 
@@ -130,7 +136,8 @@ final class FloatingWindowController: NSObject {
                 p.setFrame(f, display: true)
             }
         } else {
-            f.size.width = Self.pad + d + Self.pad
+            // Keep grip zone clear of circles: pad + d + pad + gripSz
+            f.size.width = Self.narrowWidth(d: d)
             p.setFrame(f, display: true)
         }
         relayout()
@@ -194,7 +201,7 @@ final class FloatingWindowController: NSObject {
         // Circles (subviews of bg)
         circles  = []
         lblViews = []
-        let names = ["Claude", "Codex", "AGY"]
+        let names = ["Claude", "Codex", "Antigr"]
 
         for i in 0..<3 {
             let circle = NSView()
@@ -249,8 +256,8 @@ final class FloatingWindowController: NSObject {
 
         let totalH = d * 3 + gap * 2
         let startY = (h - totalH) / 2
-        // Circles at left pad when labels shown; centered when hidden
-        let circleX: CGFloat = showL ? pad : (w - d) / 2
+        // Circles always at left pad — grip is reserved at the far right
+        let circleX: CGFloat = pad
 
         let labelX = pad + d + lgap
         let labelW = max(0, w - labelX - pad)
@@ -282,7 +289,7 @@ final class FloatingWindowController: NSObject {
         let minH  = Self.minD * 3 + Self.gap * 2 + Self.pad * 2
         let minW  = showL
             ? Self.pad + Self.minD + Self.labelGap + 30 + Self.pad
-            : Self.pad + Self.minD + Self.pad
+            : Self.narrowWidth(d: Self.minD)
 
         let f    = p.frame
         let newW = max(minW, f.width  + dx)
