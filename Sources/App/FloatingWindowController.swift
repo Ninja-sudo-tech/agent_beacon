@@ -18,10 +18,11 @@ struct FloatingSizePreset {
     var widthNoLabels:   CGFloat { Self.pad + d + Self.pad }
     var fontSize: CGFloat { max(9, d * 0.38) }
 
-    static let small  = FloatingSizePreset(key: "small",  label: "小", d: 22, labelW: 44)
-    static let medium = FloatingSizePreset(key: "medium", label: "中", d: 34, labelW: 62)
-    static let large  = FloatingSizePreset(key: "large",  label: "大", d: 50, labelW: 88)
-    static let all    = [small, medium, large]
+    static let small  = FloatingSizePreset(key: "small",  label: "小",   d: 22, labelW: 44)
+    static let medium = FloatingSizePreset(key: "medium", label: "中",   d: 34, labelW: 62)
+    static let large  = FloatingSizePreset(key: "large",  label: "大",   d: 50, labelW: 88)
+    static let xlarge = FloatingSizePreset(key: "xlarge", label: "超大", d: 70, labelW: 120)
+    static let all    = [small, medium, large, xlarge]
 
     static func forKey(_ key: String) -> FloatingSizePreset {
         all.first(where: { $0.key == key }) ?? .medium
