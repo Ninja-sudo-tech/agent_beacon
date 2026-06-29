@@ -10,6 +10,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var fileWatcher: FileWatcher?
     private var statuses: [AgentStatus] = []
     private var doneTimers: [String: Timer] = [:]
+    private let floating = FloatingWindowController()
 
     // MARK: - Lifecycle
 
@@ -22,7 +23,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem.button?.target = self
         statusItem.button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
 
-        // Ensure status directory exists
         try? FileManager.default.createDirectory(
             at: store.statusDirectory,
             withIntermediateDirectories: true,
@@ -32,6 +32,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         fileWatcher = FileWatcher(directory: store.statusDirectory) { [weak self] in
             self?.refreshStatuses()
         }
+
+        // Restore visibility prefs
+        applyMenuBarVisibility()
+        if Preferences.shared.showFloating { floating.show() }
 
         refreshStatuses()
     }
@@ -43,11 +47,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             guard let self else { return }
             self.statuses = self.store.readAll()
             self.updateMenuBarTitle()
+            self.floating.updateStatuses(self.statuses)
             self.scheduleDoneTimersIfNeeded()
         }
     }
 
-    // Label shown beside each traffic-light dot in the menu bar
+    // MARK: - Menu bar title
+
     private static let agentLabel: [String: String] = [
         "claude":      "Claude",
         "codex":       "Codex",
@@ -55,13 +61,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     ]
 
     private func updateMenuBarTitle() {
+        guard Preferences.shared.showMenuBar else { return }
         let indicators = knownAgents.map { agent -> String in
-            let status = statuses.first(where: { $0.agent == agent })
-            let state  = status?.state ?? .idle
-            let label  = Self.agentLabel[agent] ?? agent
+            let state = statuses.first(where: { $0.agent == agent })?.state ?? .idle
+            let label = Self.agentLabel[agent] ?? agent
             return "\(state.menuBarEmoji)\(label)"
         }
         statusItem.button?.title = " " + indicators.joined(separator: "  ")
+    }
+
+    private func applyMenuBarVisibility() {
+        statusItem.isVisible = Preferences.shared.showMenuBar
     }
 
     // MARK: - Done Auto-Transition
@@ -73,20 +83,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         for status in statuses where status.state == .done {
             guard doneTimers[status.agent] == nil else { continue }
             let agent = status.agent
-            let t = Timer.scheduledTimer(
-                withTimeInterval: TimeInterval(minutes * 60),
-                repeats: false
-            ) { [weak self] _ in
+            let t = Timer.scheduledTimer(withTimeInterval: TimeInterval(minutes * 60), repeats: false) { [weak self] _ in
                 self?.doneTimers[agent] = nil
-                let idle = AgentStatus(agent: agent, state: .idle,
-                                       message: "Auto-reset", source: "timer")
+                let idle = AgentStatus(agent: agent, state: .idle, message: "Auto-reset", source: "timer")
                 try? self?.store.write(idle)
                 self?.refreshStatuses()
             }
             doneTimers[agent] = t
         }
-
-        // Cancel timers for agents no longer in done state
         for (agent, timer) in doneTimers {
             if !statuses.contains(where: { $0.agent == agent && $0.state == .done }) {
                 timer.invalidate()
@@ -109,62 +113,56 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.autoenablesItems = false
 
         // Title
-        let titleItem = NSMenuItem(title: "Agent Beacon", action: nil, keyEquivalent: "")
+        let titleItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
         titleItem.isEnabled = false
-        let titleAttr = NSAttributedString(
+        titleItem.attributedTitle = NSAttributedString(
             string: "Agent Beacon",
-            attributes: [
-                .font: NSFont.boldSystemFont(ofSize: 13),
-                .foregroundColor: NSColor.labelColor
-            ]
+            attributes: [.font: NSFont.boldSystemFont(ofSize: 13), .foregroundColor: NSColor.labelColor]
         )
-        titleItem.attributedTitle = titleAttr
         menu.addItem(titleItem)
         menu.addItem(.separator())
 
         // Per-agent sections
-        for status in statuses {
-            addAgentSection(to: menu, status: status)
-        }
+        for status in statuses { addAgentSection(to: menu, status: status) }
 
         menu.addItem(.separator())
 
         // Global actions
-        let resetAllItem = NSMenuItem(
-            title: "全部设为空闲",
-            action: #selector(resetAll),
-            keyEquivalent: ""
-        )
+        let resetAllItem = NSMenuItem(title: "全部设为空闲", action: #selector(resetAll), keyEquivalent: "")
         resetAllItem.target = self
         menu.addItem(resetAllItem)
 
-        let openLogItem = NSMenuItem(
-            title: "打开日志目录",
-            action: #selector(openStatusDirectory),
-            keyEquivalent: ""
-        )
+        let openLogItem = NSMenuItem(title: "打开日志目录", action: #selector(openStatusDirectory), keyEquivalent: "")
         openLogItem.target = self
         menu.addItem(openLogItem)
 
         menu.addItem(.separator())
 
-        // Preferences: done auto-transition
+        // ── Display options ──
         let prefs = Preferences.shared
+
+        let menuBarItem = NSMenuItem(title: "菜单栏图标", action: #selector(toggleMenuBar), keyEquivalent: "")
+        menuBarItem.target = self
+        menuBarItem.state  = prefs.showMenuBar ? .on : .off
+        menu.addItem(menuBarItem)
+
+        let floatItem = NSMenuItem(title: "桌面浮窗", action: #selector(toggleFloating), keyEquivalent: "")
+        floatItem.target = self
+        floatItem.state  = prefs.showFloating ? .on : .off
+        menu.addItem(floatItem)
+
+        menu.addItem(.separator())
+
+        // done auto-transition
         let autoMinutes = prefs.autoTransitionDoneMinutes
-        let autoLabel = autoMinutes > 0
-            ? "done 自动转 idle: \(autoMinutes) 分钟后 ✓"
-            : "done 自动转 idle: 已禁用"
+        let autoLabel = autoMinutes > 0 ? "done 自动转 idle: \(autoMinutes) 分钟后 ✓" : "done 自动转 idle: 已禁用"
         let autoItem = NSMenuItem(title: autoLabel, action: #selector(toggleAutoTransition), keyEquivalent: "")
         autoItem.target = self
         menu.addItem(autoItem)
 
         menu.addItem(.separator())
 
-        let quitItem = NSMenuItem(
-            title: "退出 Agent Beacon",
-            action: #selector(NSApplication.terminate(_:)),
-            keyEquivalent: "q"
-        )
+        let quitItem = NSMenuItem(title: "退出 Agent Beacon", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         menu.addItem(quitItem)
 
         return menu
@@ -173,20 +171,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func addAgentSection(to menu: NSMenu, status: AgentStatus) {
         let displayName = agentDisplayNames[status.agent] ?? status.agent
 
-        // Agent header
         let headerItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
         headerItem.isEnabled = false
-        let headerAttr = NSAttributedString(
-            string: "\(displayName)",
-            attributes: [
-                .font: NSFont.boldSystemFont(ofSize: 12),
-                .foregroundColor: NSColor.secondaryLabelColor
-            ]
+        headerItem.attributedTitle = NSAttributedString(
+            string: displayName,
+            attributes: [.font: NSFont.boldSystemFont(ofSize: 12), .foregroundColor: NSColor.secondaryLabelColor]
         )
-        headerItem.attributedTitle = headerAttr
         menu.addItem(headerItem)
 
-        // Status line
         let stateColor: NSColor
         switch status.state {
         case .idle:    stateColor = .secondaryLabelColor
@@ -196,57 +188,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case .error:   stateColor = NSColor(red: 0.55, green: 0.1, blue: 0.8, alpha: 1)
         }
 
-        let stateText = "\(status.state.emoji)  \(status.state.displayName)"
         let stateItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
         stateItem.isEnabled = false
-        let stateAttr = NSAttributedString(
-            string: stateText,
-            attributes: [
-                .font: NSFont.systemFont(ofSize: 13, weight: .medium),
-                .foregroundColor: stateColor
-            ]
+        stateItem.attributedTitle = NSAttributedString(
+            string: "\(status.state.emoji)  \(status.state.displayName)",
+            attributes: [.font: NSFont.systemFont(ofSize: 13, weight: .medium), .foregroundColor: stateColor]
         )
-        stateItem.attributedTitle = stateAttr
         menu.addItem(stateItem)
 
-        // Message (if non-empty)
         if !status.message.isEmpty {
             let msgItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
             msgItem.isEnabled = false
-            let msgAttr = NSAttributedString(
+            msgItem.attributedTitle = NSAttributedString(
                 string: "    \(status.message)",
-                attributes: [
-                    .font: NSFont.systemFont(ofSize: 11),
-                    .foregroundColor: NSColor.tertiaryLabelColor
-                ]
+                attributes: [.font: NSFont.systemFont(ofSize: 11), .foregroundColor: NSColor.tertiaryLabelColor]
             )
-            msgItem.attributedTitle = msgAttr
             menu.addItem(msgItem)
         }
 
-        // Updated at
         let timeItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
         timeItem.isEnabled = false
-        let timeAttr = NSAttributedString(
+        timeItem.attributedTitle = NSAttributedString(
             string: "    更新于 \(status.formattedUpdateTime)",
-            attributes: [
-                .font: NSFont.systemFont(ofSize: 10),
-                .foregroundColor: NSColor.quaternaryLabelColor
-            ]
+            attributes: [.font: NSFont.systemFont(ofSize: 10), .foregroundColor: NSColor.quaternaryLabelColor]
         )
-        timeItem.attributedTitle = timeAttr
         menu.addItem(timeItem)
 
-        // Action: Set Idle
         let idleItem = NSMenuItem(title: "    › 设为空闲", action: #selector(setAgentIdle(_:)), keyEquivalent: "")
         idleItem.target = self
         idleItem.representedObject = status.agent
         idleItem.isEnabled = status.state != .idle
         menu.addItem(idleItem)
 
-        // Action: Open app
-        let openLabel = openActionLabel(for: status.agent)
-        let openItem = NSMenuItem(title: "    › \(openLabel)", action: #selector(openAgentApp(_:)), keyEquivalent: "")
+        let openItem = NSMenuItem(title: "    › \(openActionLabel(for: status.agent))", action: #selector(openAgentApp(_:)), keyEquivalent: "")
         openItem.target = self
         openItem.representedObject = status.agent
         menu.addItem(openItem)
@@ -269,8 +243,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard let agent = sender.representedObject as? String else { return }
         doneTimers[agent]?.invalidate()
         doneTimers[agent] = nil
-        let status = AgentStatus(agent: agent, state: .idle, message: "", source: "manual")
-        try? store.write(status)
+        try? store.write(AgentStatus(agent: agent, state: .idle, message: "", source: "manual"))
         refreshStatuses()
     }
 
@@ -287,22 +260,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard let agent = sender.representedObject as? String else { return }
         switch agent {
         case "claude":
-            // Open a new Terminal window and run claude
             let script = """
             tell application "Terminal"
                 activate
                 do script "echo 'Claude Code — use CLI: claude'"
             end tell
             """
-            if let scriptObj = NSAppleScript(source: script) {
-                scriptObj.executeAndReturnError(nil)
-            }
+            NSAppleScript(source: script)?.executeAndReturnError(nil)
         case "codex":
             NSWorkspace.shared.launchApplication("Codex")
         case "antigravity":
             NSWorkspace.shared.launchApplication("Antigravity")
-        default:
-            break
+        default: break
         }
     }
 
@@ -312,12 +281,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func toggleAutoTransition() {
         let current = Preferences.shared.autoTransitionDoneMinutes
-        // Cycle: 0 → 5 → 10 → 30 → 0
         switch current {
         case 0:  Preferences.shared.autoTransitionDoneMinutes = 5
         case 5:  Preferences.shared.autoTransitionDoneMinutes = 10
         case 10: Preferences.shared.autoTransitionDoneMinutes = 30
         default: Preferences.shared.autoTransitionDoneMinutes = 0
         }
+    }
+
+    @objc private func toggleMenuBar() {
+        let prefs = Preferences.shared
+        let next = !prefs.showMenuBar
+        // Safety: can't hide both menu bar and floating window at the same time
+        if !next && !prefs.showFloating {
+            // Force-show floating window first
+            prefs.showFloating = true
+            floating.show()
+        }
+        prefs.showMenuBar = next
+        applyMenuBarVisibility()
+        if next { updateMenuBarTitle() }
+    }
+
+    @objc private func toggleFloating() {
+        let prefs = Preferences.shared
+        let next = !prefs.showFloating
+        // Safety: can't hide both at the same time
+        if !next && !prefs.showMenuBar {
+            prefs.showMenuBar = true
+            applyMenuBarVisibility()
+            updateMenuBarTitle()
+        }
+        prefs.showFloating = next
+        if next { floating.show(); floating.updateStatuses(statuses) }
+        else     { floating.hide() }
     }
 }
