@@ -1,0 +1,81 @@
+#!/bin/bash
+# Agent Beacon — Codex CLI wrapper
+# Usage: agent-codex [codex exec arguments...]
+# Wraps 'codex exec --json' and parses JSONL events to update Agent Beacon status.
+#
+# Supported auto-detection:
+#   - Session start  → running
+#   - Approval event → waiting  (when detected in JSONL stream)
+#   - Turn complete  → done
+#   - Non-zero exit  → error
+#
+# If you need the interactive Codex TUI, use 'codex' directly and manually set:
+#   agent-beacon set codex running "Running interactive Codex"
+
+BEACON="/usr/local/bin/agent-beacon"
+CODEX_BIN="$(which codex 2>/dev/null || echo '/usr/local/bin/codex')"
+
+if [ $# -eq 0 ]; then
+    echo "Usage: agent-codex [codex exec args...]"
+    echo "       agent-codex --interactive  (launch TUI with manual status)"
+    exit 1
+fi
+
+if [ "$1" = "--interactive" ]; then
+    shift
+    "$BEACON" set codex running "运行 Codex 交互模式" 2>/dev/null
+    "$CODEX_BIN" "$@"
+    EXIT_CODE=$?
+    if [ $EXIT_CODE -eq 0 ]; then
+        "$BEACON" set codex done "交互会话结束" 2>/dev/null
+    else
+        "$BEACON" set codex error "退出码 $EXIT_CODE" 2>/dev/null
+    fi
+    exit $EXIT_CODE
+fi
+
+# Non-interactive: use codex exec --json for structured events
+"$BEACON" set codex running "正在运行 Codex" 2>/dev/null
+
+# Run codex exec with --json for structured JSONL output
+# Parse each line to detect approval requests and completion events
+"$CODEX_BIN" exec --json "$@" 2>&1 | while IFS= read -r line; do
+    # Echo the line through (so callers see normal output)
+    echo "$line"
+
+    # Parse event type from JSONL
+    if echo "$line" | python3 -c "
+import sys, json
+try:
+    obj = json.loads(sys.stdin.read())
+    t = str(obj.get('type', '')).lower()
+    msg = str(obj.get('msg', obj.get('message', ''))).lower()
+    combined = t + ' ' + msg
+    approval_keywords = ['approval', 'approve', 'waiting', 'permission', 'confirm', 'user_input', 'ask_user']
+    done_keywords = ['turn_complete', 'done', 'finished', 'completed', 'turn_end', 'session_end']
+    error_keywords = ['error', 'failed', 'exception']
+    if any(k in combined for k in approval_keywords):
+        print('WAITING')
+    elif any(k in combined for k in done_keywords):
+        print('DONE')
+    elif any(k in combined for k in error_keywords):
+        print('ERROR')
+    else:
+        print('CONTINUE')
+except:
+    print('CONTINUE')
+" 2>/dev/null | grep -q WAITING; then
+        "$BEACON" set codex waiting "等待 Codex 审批" 2>/dev/null
+    fi
+
+done
+
+PIPE_EXIT=${PIPESTATUS[0]}
+
+if [ $PIPE_EXIT -eq 0 ]; then
+    "$BEACON" set codex done "Codex 完成" 2>/dev/null
+else
+    "$BEACON" set codex error "Codex 退出码 $PIPE_EXIT" 2>/dev/null
+fi
+
+exit $PIPE_EXIT

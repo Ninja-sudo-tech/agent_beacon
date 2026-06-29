@@ -1,0 +1,27 @@
+#!/bin/bash
+# Agent Beacon — Claude Code Notification hook handler
+# Receives notification JSON via stdin. Inspects content to detect permission requests.
+
+BEACON="/usr/local/bin/agent-beacon"
+
+# Read stdin (must consume to avoid blocking the pipe)
+INPUT=$(cat 2>/dev/null || echo "{}")
+
+# Check if this notification indicates a permission/approval request
+IS_PERMISSION=$(python3 -c "
+import sys, json
+try:
+    d = json.loads('''$INPUT''' if '''$INPUT''' else '{}')
+    text = str(d).lower()
+    keywords = ['permission', 'approval', 'approve', 'allow', 'waiting', 'confirm', 'permission_request']
+    print('yes' if any(k in text for k in keywords) else 'no')
+except:
+    print('no')
+" 2>/dev/null || echo "no")
+
+if [ "$IS_PERMISSION" = "yes" ]; then
+    "$BEACON" set claude waiting "等待权限确认" 2>/dev/null &
+fi
+
+# Exit 0 — never block Claude Code
+exit 0
