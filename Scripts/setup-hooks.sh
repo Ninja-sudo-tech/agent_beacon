@@ -94,22 +94,25 @@ else
             echo "    Backup: $CODEX_HOOKS_JSON.agent-beacon-backup-$TIMESTAMP"
         fi
 
+        # IMPORTANT: Codex's Stop hook requires valid JSON on stdout.
+        # Use >/dev/null 2>&1 to silence agent-beacon output, then echo '{}' for Codex to parse.
+        # Other hooks (UserPromptSubmit, PermissionRequest) also use this pattern for consistency.
         cat > "$CODEX_HOOKS_JSON" << HOOKEOF
 {
   "hooks": {
     "UserPromptSubmit": [
       {
-        "hooks": [{"type": "command", "command": "$BEACON_BIN set codex running '处理中' 2>/dev/null; cat>/dev/null"}]
+        "hooks": [{"type": "command", "command": "$BEACON_BIN set codex running '处理中' >/dev/null 2>&1; cat>/dev/null; echo '{}'"}]
       }
     ],
     "PermissionRequest": [
       {
-        "hooks": [{"type": "command", "command": "$BEACON_BIN set codex waiting '等待权限确认' 2>/dev/null; cat>/dev/null"}]
+        "hooks": [{"type": "command", "command": "$BEACON_BIN set codex waiting '等待权限确认' >/dev/null 2>&1; cat>/dev/null; echo '{}'"}]
       }
     ],
     "Stop": [
       {
-        "hooks": [{"type": "command", "command": "$BEACON_BIN set codex done '已完成' 2>/dev/null; cat>/dev/null"}]
+        "hooks": [{"type": "command", "command": "$BEACON_BIN set codex done '已完成' >/dev/null 2>&1; cat>/dev/null; echo '{}'"}]
       }
     ]
   }
