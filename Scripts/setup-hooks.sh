@@ -58,8 +58,6 @@ add_hook("Stop",
          f"{beacon_cli} set claude done '已完成' 2>/dev/null; cat>/dev/null",
          "done")
 
-# notification fallback (catches other cases where Claude is waiting for user)
-add_hook("Notification", notify_hook, "notification/waiting fallback")
 
 with open(path, "w") as f:
     json.dump(settings, f, indent=2, ensure_ascii=False)
