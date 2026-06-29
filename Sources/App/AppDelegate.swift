@@ -33,6 +33,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.refreshStatuses()
         }
 
+        // Right-click on floating window → show the same menu (allows recovery
+        // when the menu bar icon is hidden)
+        floating.onShowMenu = { [weak self] screenPoint in
+            guard let self else { return }
+            let menu = self.buildMenu()
+            menu.popUp(positioning: nil, at: screenPoint, in: nil)
+        }
+
         // Restore visibility prefs
         applyMenuBarVisibility()
         if Preferences.shared.showFloating { floating.show() }
