@@ -90,15 +90,10 @@ final class FloatingWindowController: NSObject {
         panel?.orderOut(nil)
     }
 
-    /// Apply current size preset and label visibility — call after any pref change.
+    /// Apply current size preset, label visibility and orientation — call after any pref change.
     func applyCurrentSize() {
         guard let p = panel else { return }
-        let preset = FloatingSizePreset.forKey(Preferences.shared.floatingSize)
-        let showL  = Preferences.shared.showFloatingLabels
-        let sz = NSSize(
-            width:  showL ? preset.widthWithLabels : preset.widthNoLabels,
-            height: preset.height
-        )
+        let sz = currentSize()
         var f = p.frame
         // Anchor top-left: keep top edge fixed as size changes
         f.origin.y += f.height - sz.height
@@ -110,6 +105,36 @@ final class FloatingWindowController: NSObject {
 
     /// Convenience — call when label toggle changes.
     func applyLabelVisibility() { applyCurrentSize() }
+
+    /// Convenience — call when orientation toggle changes.
+    func applyOrientation() { applyCurrentSize() }
+
+    private func currentSize() -> NSSize {
+        let preset = FloatingSizePreset.forKey(Preferences.shared.floatingSize)
+        let showL  = Preferences.shared.showFloatingLabels
+        let horiz  = Preferences.shared.floatingOrientation == "horizontal"
+
+        if horiz {
+            let d   = preset.d
+            let pad = Self.pad, gap = Self.gap
+            let font = NSFont.systemFont(ofSize: preset.fontSize, weight: .semibold)
+            let names = ["Claude", "Codex", "Antigr"]
+            let maxLabelW = names.map {
+                ($0 as NSString).size(withAttributes: [.font: font]).width
+            }.max() ?? 0
+            let colW = max(d, maxLabelW)
+            let width = pad + colW * 3 + gap * 2 + pad
+            let labelH: CGFloat = showL ? preset.fontSize + 6 : 0
+            let labelVGap: CGFloat = showL ? 4 : 0
+            let height = pad + d + labelVGap + labelH + pad
+            return NSSize(width: width, height: height)
+        } else {
+            return NSSize(
+                width:  showL ? preset.widthWithLabels : preset.widthNoLabels,
+                height: preset.height
+            )
+        }
+    }
 
     func updateStatuses(_ statuses: [AgentStatus]) {
         guard let p = panel, p.isVisible else { return }
@@ -128,12 +153,8 @@ final class FloatingWindowController: NSObject {
     // ── Build ───────────────────────────────────────────────────────
 
     private func buildPanel() {
-        let preset = FloatingSizePreset.forKey(Preferences.shared.floatingSize)
         let showL  = Preferences.shared.showFloatingLabels
-        let sz     = NSSize(
-            width:  showL ? preset.widthWithLabels : preset.widthNoLabels,
-            height: preset.height
-        )
+        let sz     = currentSize()
         let origin = savedOrigin() ?? defaultOrigin(sz)
 
         let p = NSPanel(
@@ -209,19 +230,29 @@ final class FloatingWindowController: NSObject {
 
         let preset = FloatingSizePreset.forKey(Preferences.shared.floatingSize)
         let showL  = Preferences.shared.showFloatingLabels
+        let horiz  = Preferences.shared.floatingOrientation == "horizontal"
         let d      = preset.d
         let gap    = Self.gap
         let pad    = Self.pad
-        let lgap   = Self.labelGap
         let font   = NSFont.systemFont(ofSize: preset.fontSize, weight: .semibold)
 
         bg.frame = NSRect(x: 0, y: 0, width: w, height: h)
-        // Pill when narrow, rounded rect when labels visible
+
+        if horiz {
+            layoutHorizontal(w: w, h: h, d: d, gap: gap, pad: pad, font: font, showL: showL, bg: bg)
+        } else {
+            layoutVertical(w: w, h: h, d: d, gap: gap, pad: pad, font: font, showL: showL, bg: bg)
+        }
+    }
+
+    private func layoutVertical(w: CGFloat, h: CGFloat, d: CGFloat, gap: CGFloat, pad: CGFloat,
+                                 font: NSFont, showL: Bool, bg: NSView) {
         bg.layer?.cornerRadius = showL ? 12 : (d / 2 + pad)
 
+        let lgap = Self.labelGap
         let totalH = d * 3 + gap * 2
         let startY = (h - totalH) / 2
-        let circleX = pad   // always left-aligned
+        let circleX = pad
 
         let labelX = pad + d + lgap
         let labelW = max(0, w - labelX - pad)
@@ -239,7 +270,34 @@ final class FloatingWindowController: NSObject {
 
             lblViews[i].frame    = NSRect(x: labelX, y: labelY, width: labelW, height: textH + 2)
             lblViews[i].font     = font
+            lblViews[i].alignment = .left
             lblViews[i].isHidden = !showL || labelW < 10
+        }
+    }
+
+    private func layoutHorizontal(w: CGFloat, h: CGFloat, d: CGFloat, gap: CGFloat, pad: CGFloat,
+                                   font: NSFont, showL: Bool, bg: NSView) {
+        bg.layer?.cornerRadius = 14
+
+        let labelH: CGFloat = showL ? font.pointSize + 6 : 0
+        let labelVGap: CGFloat = showL ? 4 : 0
+
+        let totalW = w - pad * 2 - gap * 2
+        let colW = totalW / 3
+        let circleY = pad + labelH + labelVGap   // circles sit above the label row
+
+        for i in 0..<3 {
+            guard i < circles.count, i < lblViews.count else { break }
+            let colX = pad + CGFloat(i) * (colW + gap)
+            let cx = colX + (colW - d) / 2
+
+            circles[i].frame = NSRect(x: cx, y: circleY, width: d, height: d)
+            circles[i].layer?.cornerRadius = d / 2
+
+            lblViews[i].frame    = NSRect(x: colX, y: pad, width: colW, height: labelH)
+            lblViews[i].font     = font
+            lblViews[i].alignment = .center
+            lblViews[i].isHidden = !showL
         }
     }
 

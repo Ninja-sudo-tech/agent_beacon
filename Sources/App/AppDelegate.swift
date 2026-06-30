@@ -180,6 +180,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             menu.addItem(item)
         }
 
+        // Orientation
+        let orientations: [(String, String)] = [("竖向排列", "vertical"), ("横向排列", "horizontal")]
+        for (label, key) in orientations {
+            let item = NSMenuItem(title: "    › \(label)", action: #selector(setFloatingOrientation(_:)), keyEquivalent: "")
+            item.target            = self
+            item.representedObject = key
+            item.state             = prefs.floatingOrientation == key ? .on : .off
+            item.isEnabled         = prefs.showFloating
+            menu.addItem(item)
+        }
+
         menu.addItem(.separator())
 
         // done auto-transition
@@ -354,5 +365,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard let key = sender.representedObject as? String else { return }
         Preferences.shared.floatingSize = key
         floating.applyCurrentSize()
+    }
+
+    @objc private func setFloatingOrientation(_ sender: NSMenuItem) {
+        guard let key = sender.representedObject as? String else { return }
+        Preferences.shared.floatingOrientation = key
+        floating.applyOrientation()
     }
 }

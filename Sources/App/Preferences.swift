@@ -29,10 +29,16 @@ final class Preferences {
         set { defaults.set(newValue, forKey: "\(suite).showFloating") }
     }
 
-    /// Floating window size preset: "small" | "medium" | "large". Default: "medium".
+    /// Floating window size preset: "small" | "medium" | "large" | "xlarge" | "xxlarge". Default: "medium".
     var floatingSize: String {
         get { defaults.string(forKey: "\(suite).floatingSize") ?? "medium" }
         set { defaults.set(newValue, forKey: "\(suite).floatingSize") }
+    }
+
+    /// Floating window layout: "vertical" | "horizontal". Default: "vertical".
+    var floatingOrientation: String {
+        get { defaults.string(forKey: "\(suite).floatingOrientation") ?? "vertical" }
+        set { defaults.set(newValue, forKey: "\(suite).floatingOrientation") }
     }
 
     /// Show agent name labels beside circles in floating window. Default: true.
