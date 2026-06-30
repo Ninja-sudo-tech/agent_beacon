@@ -15,6 +15,13 @@ payload.role == "assistant" is direct proof Codex is actively producing
 output, regardless of why hooks went quiet. We tail the most recently
 modified rollout file across all dates and flip the light back to running
 whenever a new assistant entry appears.
+
+Race condition guard: the final assistant entry of a turn is written right
+before Codex fires Stop (→ done). Since this watcher polls on its own
+schedule, it can read that entry AFTER Stop already set done — overwriting
+it back to running with nothing left to correct it (stuck yellow even
+though output is complete). Fix: skip the write if the status file already
+says done and was set within the last GRACE_SECONDS.
 """
 
 from __future__ import annotations
@@ -25,10 +32,13 @@ import time
 import glob
 import json
 import subprocess
+from datetime import datetime, timezone
 
-BEACON       = os.path.expanduser("~/.local/bin/agent-beacon")
-SESSIONS_DIR = os.path.expanduser("~/.codex/sessions")
-RESCAN_EVERY = 1.0
+BEACON        = os.path.expanduser("~/.local/bin/agent-beacon")
+STATUS_FILE   = os.path.expanduser("~/.agent-beacon/status/codex.json")
+SESSIONS_DIR  = os.path.expanduser("~/.codex/sessions")
+RESCAN_EVERY  = 1.0
+GRACE_SECONDS = 1.5   # don't override a "done" set more recently than this
 
 
 def set_status(state: str, msg: str):
@@ -39,6 +49,20 @@ def set_status(state: str, msg: str):
         )
     except Exception:
         pass
+
+
+def recently_done() -> bool:
+    try:
+        with open(STATUS_FILE) as f:
+            d = json.load(f)
+        if d.get("state") != "done":
+            return False
+        ts = datetime.strptime(d.get("updatedAt", ""), "%Y-%m-%dT%H:%M:%SZ")
+        ts = ts.replace(tzinfo=timezone.utc)
+        age = (datetime.now(timezone.utc) - ts).total_seconds()
+        return age < GRACE_SECONDS
+    except Exception:
+        return False
 
 
 def find_active_transcript():
@@ -82,6 +106,8 @@ class CodexWatcher:
         if d.get("type") == "response_item":
             payload = d.get("payload", {})
             if payload.get("role") == "assistant":
+                if recently_done():
+                    return   # Stop already fired correctly; don't race it
                 set_status("running", "处理中")
 
     def run(self):

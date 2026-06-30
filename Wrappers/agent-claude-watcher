@@ -17,6 +17,15 @@ back to running whenever a new assistant entry appears.
 
 This does not replace the hooks (which remain faster for the common case);
 it's a safety net for the post-denial gap.
+
+Race condition guard: the final "assistant" transcript entry of a turn is
+written right before Claude Code fires the Stop hook (→ done). Since this
+watcher polls the file on its own schedule, it can read that last entry
+AFTER Stop has already set done — overwriting it back to running with
+nothing left to correct it (stuck yellow forever, until the next prompt).
+Fix: before writing running, check the current status file directly; if
+it's already "done" and was set within the last GRACE_SECONDS, skip the
+write and let Stop's result stand.
 """
 
 from __future__ import annotations
@@ -27,10 +36,13 @@ import time
 import glob
 import json
 import subprocess
+from datetime import datetime, timezone
 
 BEACON       = os.path.expanduser("~/.local/bin/agent-beacon")
+STATUS_FILE  = os.path.expanduser("~/.agent-beacon/status/claude.json")
 PROJECTS_DIR = os.path.expanduser("~/.claude/projects")
-RESCAN_EVERY = 1.0   # seconds between checks for a more-recently-active transcript
+RESCAN_EVERY = 1.0    # seconds between checks for a more-recently-active transcript
+GRACE_SECONDS = 1.5   # don't override a "done" set more recently than this
 
 
 def set_status(state: str, msg: str):
@@ -41,6 +53,22 @@ def set_status(state: str, msg: str):
         )
     except Exception:
         pass
+
+
+def recently_done() -> bool:
+    """True if the status file currently says done and was updated within
+    the last GRACE_SECONDS — used to avoid racing Stop's result."""
+    try:
+        with open(STATUS_FILE) as f:
+            d = json.load(f)
+        if d.get("state") != "done":
+            return False
+        ts = datetime.strptime(d.get("updatedAt", ""), "%Y-%m-%dT%H:%M:%SZ")
+        ts = ts.replace(tzinfo=timezone.utc)
+        age = (datetime.now(timezone.utc) - ts).total_seconds()
+        return age < GRACE_SECONDS
+    except Exception:
+        return False
 
 
 def find_active_transcript() -> str | None:
@@ -82,6 +110,8 @@ class ClaudeWatcher:
         # Any new assistant turn proves Claude is actively working —
         # covers the post-denial / post-custom-feedback gap that hooks miss.
         if d.get("type") == "assistant":
+            if recently_done():
+                return   # Stop already fired correctly; don't race it
             set_status("running", "处理中")
 
     def run(self):
