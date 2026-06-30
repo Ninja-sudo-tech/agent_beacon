@@ -21,7 +21,8 @@ agent_beacon/
 ├── Resources/                      # Info.plist、LaunchAgent plists
 ├── Wrappers/                       # Claude/Codex hook 脚本 + AGY 日志监听守护进程
 │   ├── agent-gemini-watcher        # Antigravity 状态自动检测（日志监听）
-│   └── agent-claude-watcher        # Claude Code 状态自动检测（会话记录监听）
+│   ├── agent-claude-watcher        # Claude Code 状态自动检测（会话记录监听）
+│   └── agent-codex-watcher         # Codex 状态自动检测（会话记录监听）
 └── Scripts/                        # build、install、uninstall、setup-hooks
 ```
 
@@ -216,6 +217,22 @@ codex exec --json "..." < /dev/null
 - ✅ `hooks.json`：Desktop App 与 CLI 共享 `~/.codex/`，应生效（需实测）
 - 首次使用需在 Desktop 中通过信任对话框
 
+### 拒绝权限后红灯卡死的修复（与 Claude Code 相同的问题）
+
+排查发现 Codex 和 Claude Code 共享同一套 hook 事件集合（`PreToolUse` / `PostToolUse` / `PermissionRequest` / `UserPromptSubmit` / `Stop` 等），因此存在**完全相同的缺陷**：用户拒绝一个 exec/patch 审批请求后，工具不会执行，`PostToolUse` 不会触发；Codex 转而继续生成文字或尝试别的方案时，没有任何 hook 能捕捉这个"恢复工作"的时刻，红灯会一直卡到 `Stop` 才变绿。
+
+**修复：** Codex CLI 会把每个会话实时写入：
+```
+~/.codex/sessions/<年>/<月>/<日>/rollout-<时间戳>-<id>.jsonl
+```
+确认了里面的 `response_item` 条目在 `payload.role == "assistant"` 时，正是 Codex 产出内容的直接证据（与 Claude Code 的 `type:"assistant"` 条目结构高度一致）。`agent-codex-watcher` 持续追踪全部会话中最近修改的那个文件，一旦出现新的 assistant 条目就立即设为 `running`。
+
+**守护进程部署：**
+```
+~/.local/bin/agent-codex-watcher
+~/Library/LaunchAgents/com.agentbeacon.codex-watcher.plist   # KeepAlive=true
+```
+
 ---
 
 ## Antigravity 集成
@@ -273,18 +290,20 @@ agent-beacon set antigravity done "任务完成"
 
 ## 开机自启
 
-已安装三个 LaunchAgent：
+已安装四个 LaunchAgent：
 
 | Label | 作用 | KeepAlive |
 |-------|------|-----------|
 | `com.agentbeacon.app` | 启动 AgentBeacon.app（菜单栏 + 浮窗） | false |
 | `com.agentbeacon.gemini-watcher` | Antigravity 日志监听守护进程 | true（崩溃自动重启）|
 | `com.agentbeacon.claude-watcher` | Claude Code 会话记录监听守护进程（补充 hooks 盲区） | true（崩溃自动重启）|
+| `com.agentbeacon.codex-watcher` | Codex 会话记录监听守护进程（补充 hooks 盲区） | true（崩溃自动重启）|
 
 日志：
 - App: `/tmp/agent-beacon-stdout.log`、`/tmp/agent-beacon-stderr.log`
 - AGY watcher: `/tmp/agent-gemini-watcher.log`
 - Claude watcher: `/tmp/agent-claude-watcher.log`
+- Codex watcher: `/tmp/agent-codex-watcher.log`
 
 手动控制（以 gemini-watcher 为例，其余两个同理）：
 ```bash
