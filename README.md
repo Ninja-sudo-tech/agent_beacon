@@ -20,7 +20,8 @@ agent_beacon/
 ├── Tests/                          # 独立测试套件 (50 项测试)
 ├── Resources/                      # Info.plist、LaunchAgent plists
 ├── Wrappers/                       # Claude/Codex hook 脚本 + AGY 日志监听守护进程
-│   └── agent-gemini-watcher        # Antigravity 状态自动检测
+│   ├── agent-gemini-watcher        # Antigravity 状态自动检测（日志监听）
+│   └── agent-claude-watcher        # Claude Code 状态自动检测（会话记录监听）
 └── Scripts/                        # build、install、uninstall、setup-hooks
 ```
 
@@ -140,6 +141,24 @@ agent-beacon list
 
 > 早期版本曾使用 `Notification` hook 做关键词猜测来检测等待状态，但会对 Claude 的常规系统通知（更新提示等）产生误判，已移除。
 
+### 拒绝权限后红灯卡死的修复
+
+**问题：** 用户拒绝权限请求后（无论是单纯拒绝，还是拒绝并输入自定义反馈），Claude 会继续生成文字或尝试其他方案，但 hook 系统里**没有任何事件**能捕捉"助手正在生成文本"这件事——`PreToolUse`/`PostToolUse` 只在工具调用时触发，拒绝意味着工具根本没执行，因此不会触发。`UserPromptSubmit` 只在用户主动输入新提示词时触发。结果是红灯会一直卡住，直到 `Stop` 才变绿，期间完全无法反映 Claude 实际仍在工作。
+
+**修复：** Claude Code 会把每一轮对话实时写入：
+```
+~/.claude/projects/<project-slug>/<session-id>.jsonl
+```
+`agent-claude-watcher`（Python 守护进程）持续追踪**全部项目中最近被修改的会话文件**，每当看到新的 `"type":"assistant"` 条目出现，立即将状态设为 `running`——这是 hooks 之外的补充信号，专门填补"拒绝后 Claude 继续工作但无 hook 可用"的空白。
+
+**守护进程部署：**
+```
+~/.local/bin/agent-claude-watcher
+~/Library/LaunchAgents/com.agentbeacon.claude-watcher.plist   # KeepAlive=true
+```
+
+**注意：** 该 watcher 只会跟踪全局最近修改的会话文件，因此无法区分同时运行的多个 Claude Code 会话（不同终端/不同项目）——这与单一指示灯本身无法表示多会话状态的限制一致。
+
 **IDE 集成状态：**  
 - ✅ Claude Code CLI：hooks 通过 settings.json 生效
 - ⚠️ JetBrains/VS Code 集成：读取同一 settings.json，hooks **应该**生效，但需实测验证
@@ -254,22 +273,21 @@ agent-beacon set antigravity done "任务完成"
 
 ## 开机自启
 
-已安装两个 LaunchAgent：
+已安装三个 LaunchAgent：
 
 | Label | 作用 | KeepAlive |
 |-------|------|-----------|
 | `com.agentbeacon.app` | 启动 AgentBeacon.app（菜单栏 + 浮窗） | false |
-| `com.agentbeacon.gemini-watcher` | 启动 Antigravity 日志监听守护进程 | true（崩溃自动重启）|
+| `com.agentbeacon.gemini-watcher` | Antigravity 日志监听守护进程 | true（崩溃自动重启）|
+| `com.agentbeacon.claude-watcher` | Claude Code 会话记录监听守护进程（补充 hooks 盲区） | true（崩溃自动重启）|
 
 日志：
 - App: `/tmp/agent-beacon-stdout.log`、`/tmp/agent-beacon-stderr.log`
-- Watcher: `/tmp/agent-gemini-watcher.log`
+- AGY watcher: `/tmp/agent-gemini-watcher.log`
+- Claude watcher: `/tmp/agent-claude-watcher.log`
 
-手动控制：
+手动控制（以 gemini-watcher 为例，其余两个同理）：
 ```bash
-launchctl load   ~/Library/LaunchAgents/com.agentbeacon.app.plist
-launchctl unload ~/Library/LaunchAgents/com.agentbeacon.app.plist
-
 launchctl load   ~/Library/LaunchAgents/com.agentbeacon.gemini-watcher.plist
 launchctl unload ~/Library/LaunchAgents/com.agentbeacon.gemini-watcher.plist
 

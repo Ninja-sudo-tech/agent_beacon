@@ -1,0 +1,117 @@
+#!/usr/bin/env python3
+"""
+Agent Beacon — Claude Code transcript watcher
+Complements the settings.json hooks (UserPromptSubmit / PermissionRequest /
+PostToolUse / Stop) by catching a gap those hooks cannot see: when the user
+denies a permission request (or denies + types custom feedback), Claude
+Code has NO hook event for "assistant resumed generating". The hook system
+only exposes PreToolUse/PostToolUse/PermissionRequest/UserPromptSubmit/Stop —
+none of which fire while Claude is just producing text after a denial.
+
+Fix: Claude Code writes every session turn in real time to
+  ~/.claude/projects/<project-slug>/<session-id>.jsonl
+Each new "assistant" entry in that transcript is direct proof Claude is
+actively working — regardless of why hooks went quiet. We tail the most
+recently modified transcript file across all projects and flip the light
+back to running whenever a new assistant entry appears.
+
+This does not replace the hooks (which remain faster for the common case);
+it's a safety net for the post-denial gap.
+"""
+
+from __future__ import annotations
+
+import os
+import sys
+import time
+import glob
+import json
+import subprocess
+
+BEACON       = os.path.expanduser("~/.local/bin/agent-beacon")
+PROJECTS_DIR = os.path.expanduser("~/.claude/projects")
+RESCAN_EVERY = 1.0   # seconds between checks for a more-recently-active transcript
+
+
+def set_status(state: str, msg: str):
+    try:
+        subprocess.run(
+            [BEACON, "set", "claude", state, msg],
+            capture_output=True, timeout=3
+        )
+    except Exception:
+        pass
+
+
+def find_active_transcript() -> str | None:
+    """Most recently modified session transcript across all projects —
+    almost certainly the session the user is currently interacting with."""
+    files = glob.glob(os.path.join(PROJECTS_DIR, "*", "*.jsonl"))
+    if not files:
+        return None
+    return max(files, key=os.path.getmtime)
+
+
+class ClaudeWatcher:
+    def __init__(self):
+        self._current_path = None
+        self._fd = None
+        self._last_rescan = 0.0
+
+    def _open(self, path: str):
+        if self._fd:
+            try:
+                self._fd.close()
+            except Exception:
+                pass
+        try:
+            self._fd = open(path, "r", errors="replace")
+            self._fd.seek(0, 2)   # start at end — only react to new entries
+            self._current_path = path
+        except OSError:
+            self._fd = None
+
+    def _handle_line(self, line: str):
+        line = line.strip()
+        if not line:
+            return
+        try:
+            d = json.loads(line)
+        except (json.JSONDecodeError, ValueError):
+            return
+        # Any new assistant turn proves Claude is actively working —
+        # covers the post-denial / post-custom-feedback gap that hooks miss.
+        if d.get("type") == "assistant":
+            set_status("running", "处理中")
+
+    def run(self):
+        path = find_active_transcript()
+        while not path:
+            print(f"[agent-claude-watcher] Waiting for a Claude Code session...", flush=True)
+            time.sleep(3)
+            path = find_active_transcript()
+
+        self._open(path)
+        print(f"[agent-claude-watcher] Watching: {path}", flush=True)
+
+        while True:
+            now = time.time()
+            if now - self._last_rescan > RESCAN_EVERY:
+                self._last_rescan = now
+                latest = find_active_transcript()
+                if latest and latest != self._current_path:
+                    print(f"[agent-claude-watcher] Switched to: {latest}", flush=True)
+                    self._open(latest)
+
+            if self._fd:
+                for line in self._fd:
+                    self._handle_line(line)
+
+            time.sleep(0.1)
+
+
+if __name__ == "__main__":
+    try:
+        ClaudeWatcher().run()
+    except KeyboardInterrupt:
+        sys.exit(0)
