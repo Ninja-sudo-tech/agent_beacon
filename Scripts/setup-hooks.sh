@@ -43,19 +43,37 @@ def add_hook(event, command_str, label):
     else:
         print(f"    {event} hook already present, skipped")
 
+# Background pattern: (cat>/dev/null; agent-beacon ...) &  — the hook shell
+# exits immediately so Claude doesn't wait on it (~100-200ms saved per call).
+# Used for everything except PermissionRequest (Claude is already paused for
+# user input, no latency cost to being synchronous) and Stop (last hook in
+# the turn — nothing waits on it, and synchronous execution avoids a race
+# where a background write lands after the watcher's next poll, which can
+# leave the light stuck on the wrong color).
+def bg(cmd):
+    return f"(cat>/dev/null; {cmd} 2>/dev/null) &"
+
+def sync(cmd):
+    return f"{cmd} 2>/dev/null; cat>/dev/null"
+
 # running when user submits a prompt
 add_hook("UserPromptSubmit",
-         f"{beacon_cli} set claude running '处理中' 2>/dev/null; cat>/dev/null",
+         bg(f"{beacon_cli} set claude running '处理中'"),
          "running")
 
 # waiting when Claude needs permission to run a tool (dedicated hook event)
 add_hook("PermissionRequest",
-         f"{beacon_cli} set claude waiting '等待权限确认' 2>/dev/null; cat>/dev/null",
+         sync(f"{beacon_cli} set claude waiting '等待权限确认'"),
          "waiting — permission dialog")
 
-# done when session stops
+# running again once a tool finishes (resumes after a permission approval)
+add_hook("PostToolUse",
+         bg(f"{beacon_cli} set claude running '处理中'"),
+         "running — resumed after tool/permission")
+
+# done when session stops — synchronous, see comment above
 add_hook("Stop",
-         f"{beacon_cli} set claude done '已完成' 2>/dev/null; cat>/dev/null",
+         sync(f"{beacon_cli} set claude done '已完成'"),
          "done")
 
 
@@ -92,15 +110,20 @@ else
             echo "    Backup: $CODEX_HOOKS_JSON.agent-beacon-backup-$TIMESTAMP"
         fi
 
-        # IMPORTANT: Codex's Stop hook requires valid JSON on stdout.
-        # Use >/dev/null 2>&1 to silence agent-beacon output, then echo '{"suppressOutput": true}' for Codex to parse.
-        # Other hooks (UserPromptSubmit, PermissionRequest) also use this pattern for consistency.
+        # IMPORTANT: Codex's hooks require valid JSON on stdout, so every command
+        # ends with echo '{"suppressOutput": true}' (also hides hook noise from the
+        # Codex chat UI). UserPromptSubmit is backgrounded with & so Codex doesn't
+        # wait on agent-beacon's process startup (~100-200ms saved). PermissionRequest
+        # stays synchronous (Codex is already paused for user input, no cost). Stop
+        # is synchronous too — it's the last hook in a turn, nothing waits on it, and
+        # async execution there can race the codex-watcher daemon's next poll and
+        # leave the light stuck on the wrong color.
         cat > "$CODEX_HOOKS_JSON" << HOOKEOF
 {
   "hooks": {
     "UserPromptSubmit": [
       {
-        "hooks": [{"type": "command", "command": "$BEACON_BIN set codex running '处理中' >/dev/null 2>&1; cat>/dev/null; echo '{"suppressOutput": true}'"}]
+        "hooks": [{"type": "command", "command": "$BEACON_BIN set codex running '处理中' >/dev/null 2>&1 & cat>/dev/null; echo '{"suppressOutput": true}'"}]
       }
     ],
     "PermissionRequest": [

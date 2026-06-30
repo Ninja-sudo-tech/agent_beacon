@@ -7,6 +7,10 @@ APP_BUNDLE="$PROJECT_DIR/AgentBeacon.app"
 CLI_BINARY="$PROJECT_DIR/agent-beacon"
 CODEX_WRAPPER="$PROJECT_DIR/Wrappers/agent-codex"
 CLAUDE_NOTIFY="$PROJECT_DIR/Wrappers/agent-beacon-claude-notify"
+GEMINI_WATCHER="$PROJECT_DIR/Wrappers/agent-gemini-watcher"
+CLAUDE_WATCHER="$PROJECT_DIR/Wrappers/agent-claude-watcher"
+CODEX_WATCHER="$PROJECT_DIR/Wrappers/agent-codex-watcher"
+BIN_DIR="$HOME/.local/bin"
 
 echo "==> Agent Beacon Installer"
 echo ""
@@ -31,48 +35,56 @@ cp -r "$APP_BUNDLE" "/Applications/"
 xattr -cr "/Applications/AgentBeacon.app" 2>/dev/null || true
 echo "    Done."
 
-# --- Install CLI ---
-echo "--> Installing agent-beacon CLI to /usr/local/bin/"
-mkdir -p /usr/local/bin
-cp "$CLI_BINARY" /usr/local/bin/agent-beacon
-chmod +x /usr/local/bin/agent-beacon
+# --- Install CLI + wrappers + watchers to ~/.local/bin (no sudo needed) ---
+echo "--> Installing CLI and watcher daemons to $BIN_DIR/"
+mkdir -p "$BIN_DIR"
+cp "$CLI_BINARY"      "$BIN_DIR/agent-beacon"
+cp "$CODEX_WRAPPER"   "$BIN_DIR/agent-codex"
+cp "$CLAUDE_NOTIFY"   "$BIN_DIR/agent-beacon-claude-notify"
+cp "$GEMINI_WATCHER"  "$BIN_DIR/agent-gemini-watcher"
+cp "$CLAUDE_WATCHER"  "$BIN_DIR/agent-claude-watcher"
+cp "$CODEX_WATCHER"   "$BIN_DIR/agent-codex-watcher"
+chmod +x "$BIN_DIR/agent-beacon" "$BIN_DIR/agent-codex" "$BIN_DIR/agent-beacon-claude-notify" \
+         "$BIN_DIR/agent-gemini-watcher" "$BIN_DIR/agent-claude-watcher" "$BIN_DIR/agent-codex-watcher"
 echo "    Done."
-
-# --- Install Codex wrapper ---
-echo "--> Installing agent-codex wrapper to /usr/local/bin/"
-cp "$CODEX_WRAPPER" /usr/local/bin/agent-codex
-chmod +x /usr/local/bin/agent-codex
-echo "    Done."
-
-# --- Install Claude notify hook ---
-echo "--> Installing agent-beacon-claude-notify to /usr/local/bin/"
-cp "$CLAUDE_NOTIFY" /usr/local/bin/agent-beacon-claude-notify
-chmod +x /usr/local/bin/agent-beacon-claude-notify
-echo "    Done."
+if [[ ":$PATH:" != *":$BIN_DIR:"* ]]; then
+    echo "    NOTE: $BIN_DIR is not on your PATH. Add to your shell profile:"
+    echo "          export PATH=\"\$HOME/.local/bin:\$PATH\""
+fi
 
 # --- Create status directory ---
 echo "--> Creating status directory ~/.agent-beacon/status/"
 mkdir -p ~/.agent-beacon/status
 echo "    Done."
 
-# --- LaunchAgent for auto-start ---
+# --- LaunchAgents for auto-start (App + 3 watcher daemons) ---
 LAUNCH_AGENT_DIR="$HOME/Library/LaunchAgents"
-LAUNCH_AGENT_PLIST="$LAUNCH_AGENT_DIR/com.agentbeacon.app.plist"
-echo "--> Installing LaunchAgent for auto-start at login..."
 mkdir -p "$LAUNCH_AGENT_DIR"
-cp "$PROJECT_DIR/Resources/com.agentbeacon.app.plist" "$LAUNCH_AGENT_PLIST"
-launchctl unload "$LAUNCH_AGENT_PLIST" 2>/dev/null || true
-launchctl load "$LAUNCH_AGENT_PLIST"
+echo "--> Installing LaunchAgents for auto-start at login..."
+
+install_agent() {
+    local plist_name="$1"
+    local plist_path="$LAUNCH_AGENT_DIR/$plist_name"
+    cp "$PROJECT_DIR/Resources/$plist_name" "$plist_path"
+    launchctl unload "$plist_path" 2>/dev/null || true
+    launchctl load "$plist_path"
+    echo "    $plist_name"
+}
+
+install_agent "com.agentbeacon.app.plist"
+install_agent "com.agentbeacon.gemini-watcher.plist"
+install_agent "com.agentbeacon.claude-watcher.plist"
+install_agent "com.agentbeacon.codex-watcher.plist"
 echo "    Done."
 
 echo ""
 echo "==> Installation complete!"
 echo ""
-echo "  App:        /Applications/AgentBeacon.app"
-echo "  CLI:        /usr/local/bin/agent-beacon"
-echo "  Codex wrap: /usr/local/bin/agent-codex"
-echo "  Status dir: ~/.agent-beacon/status/"
-echo "  LaunchAgent: $LAUNCH_AGENT_PLIST"
+echo "  App:         /Applications/AgentBeacon.app"
+echo "  CLI:         $BIN_DIR/agent-beacon"
+echo "  Codex wrap:  $BIN_DIR/agent-codex"
+echo "  Watchers:    $BIN_DIR/agent-{gemini,claude,codex}-watcher (4 LaunchAgents running)"
+echo "  Status dir:  ~/.agent-beacon/status/"
 echo ""
 echo "The app should now appear in your menu bar."
 echo "Run: ./Scripts/setup-hooks.sh  to configure Claude Code and Codex hooks."

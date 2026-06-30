@@ -160,6 +160,20 @@ agent-beacon list
 
 **注意：** 该 watcher 只会跟踪全局最近修改的会话文件，因此无法区分同时运行的多个 Claude Code 会话（不同终端/不同项目）——这与单一指示灯本身无法表示多会话状态的限制一致。
 
+### watcher 与 hooks 之间的两个竞态条件
+
+watcher 和 hooks 是两个独立进程，各自写同一个状态文件，没有同步机制，因此存在两类竞态：
+
+**① "已完成"被覆盖回"运行中"：** Claude 写出最后一句话 → `Stop` hook 几乎同时触发设为 `done`（绿）→ watcher 按自己的轮询节奏读到那条"最后的话"，但读取时机**恰好晚于** `Stop` 已经写入 → watcher 把状态覆盖回 `running`（黄）→ 这一轮真的结束了，后面不会再有任何信号纠正它，于是卡在黄色直到下一次提交新提示词。
+
+  修复：① 把 `Stop` hook 改为**同步执行**（它是一轮对话里最后一个 hook，后面没有任何动作在等它，同步执行零延迟代价，但能让它的写入确定性地先于 watcher 的下一次轮询完成）；② watcher 额外加了 1.5 秒"刚设置过 done 就不要覆盖"的保护窗口兜底。
+
+**② "等待权限"被覆盖回"运行中"：** Claude 生成一条包含 `tool_use`（如调用 Edit 工具）的消息 → 这条消息既会被写进会话记录，也会触发 `PermissionRequest` hook 设为 `waiting`（红）→ watcher 轮询到同一条消息，如果读取时机**早于或接近** `PermissionRequest` 执行，会把状态设为 `running`，把红色覆盖掉——用户还没看到确认框，灯就先变黄了。
+
+  修复：watcher 检查 assistant 消息内容，**只要包含 `tool_use` 块就跳过**，不设置 `running`。这类消息的状态转换完全交给 `PermissionRequest`/`PostToolUse`（同步、有保障的官方 hook）处理；watcher 只负责"纯文本"消息——也正是拒绝权限后 Claude 继续说话、但没有任何 hook 能捕捉的那种场景，这与 watcher 的设计初衷一致。
+
+> Codex 的会话记录里工具调用是独立的 `function_call` 条目类型，不会出现在 `role:"assistant"` 的消息里，因此 Codex watcher 天然不受第②种竞态影响，无需同样的过滤。
+
 **IDE 集成状态：**  
 - ✅ Claude Code CLI：hooks 通过 settings.json 生效
 - ⚠️ JetBrains/VS Code 集成：读取同一 settings.json，hooks **应该**生效，但需实测验证
@@ -232,6 +246,8 @@ codex exec --json "..." < /dev/null
 ~/.local/bin/agent-codex-watcher
 ~/Library/LaunchAgents/com.agentbeacon.codex-watcher.plist   # KeepAlive=true
 ```
+
+**完成后不变绿的修复：** 与 Claude Code 完全相同的"已完成被覆盖回运行中"竞态（见 Claude Code 章节详细说明）。`Stop` hook 已改为同步执行，watcher 也加了 1.5 秒保护窗口兜底。
 
 ---
 

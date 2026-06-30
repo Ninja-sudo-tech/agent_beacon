@@ -107,11 +107,21 @@ class ClaudeWatcher:
             d = json.loads(line)
         except (json.JSONDecodeError, ValueError):
             return
-        # Any new assistant turn proves Claude is actively working —
-        # covers the post-denial / post-custom-feedback gap that hooks miss.
         if d.get("type") == "assistant":
+            content = d.get("message", {}).get("content", [])
+            if isinstance(content, list) and any(
+                isinstance(c, dict) and c.get("type") == "tool_use" for c in content
+            ):
+                # This entry is what triggers PreToolUse/PermissionRequest —
+                # those synchronous hooks own this transition (waiting/running).
+                # Setting running here would race PermissionRequest and can
+                # overwrite waiting (red) back to running (yellow) before the
+                # user even sees the permission dialog.
+                return
             if recently_done():
                 return   # Stop already fired correctly; don't race it
+            # Pure-text assistant output proves Claude is actively working —
+            # covers the post-denial / post-custom-feedback gap that hooks miss.
             set_status("running", "处理中")
 
     def run(self):
