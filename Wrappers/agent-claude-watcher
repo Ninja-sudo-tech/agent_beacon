@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 """
 Agent Beacon — Claude Code transcript watcher
-Complements the settings.json hooks (UserPromptSubmit / PermissionRequest /
-PostToolUse / Stop) by catching a gap those hooks cannot see: when the user
-denies a permission request (or denies + types custom feedback), Claude
-Code has NO hook event for "assistant resumed generating". The hook system
-only exposes PreToolUse/PostToolUse/PermissionRequest/UserPromptSubmit/Stop —
-none of which fire while Claude is just producing text after a denial.
+Complements the settings.json hooks (UserPromptSubmit / PreToolUse /
+PostToolUse / Stop) by catching a gap those hooks cannot see: when the
+user denies a permission request (or denies + types custom feedback),
+Claude Code has NO hook event for "assistant resumed generating". (Note:
+"PermissionRequest" is a documented-sounding hook name but was confirmed
+empirically to never actually fire — 0 occurrences across 500+ real tool
+calls in session history — so it is not part of this picture; see
+agent-beacon-claude-pretooluse for the heuristic that replaces it.)
 
 Fix: Claude Code writes every session turn in real time to
   ~/.claude/projects/<project-slug>/<session-id>.jsonl
@@ -41,8 +43,21 @@ from datetime import datetime, timezone
 BEACON       = os.path.expanduser("~/.local/bin/agent-beacon")
 STATUS_FILE  = os.path.expanduser("~/.agent-beacon/status/claude.json")
 PROJECTS_DIR = os.path.expanduser("~/.claude/projects")
+PENDING_DIR  = os.path.expanduser("~/.agent-beacon/claude-pending")
 RESCAN_EVERY = 1.0    # seconds between checks for a more-recently-active transcript
 GRACE_SECONDS = 1.5   # don't override a "done" set more recently than this
+
+
+def clear_pending_markers():
+    """Remove PreToolUse's pending markers. Called when we detect Claude has
+    clearly resumed (pure-text output) — this cancels its 4s timeout fallback,
+    which would otherwise fire 'waiting' later for a tool that was denied
+    (PostToolUse never runs on denial, so its marker is never cleared there)."""
+    try:
+        for f in glob.glob(os.path.join(PENDING_DIR, "*")):
+            os.remove(f)
+    except Exception:
+        pass
 
 
 def set_status(state: str, msg: str):
@@ -122,6 +137,7 @@ class ClaudeWatcher:
                 return   # Stop already fired correctly; don't race it
             # Pure-text assistant output proves Claude is actively working —
             # covers the post-denial / post-custom-feedback gap that hooks miss.
+            clear_pending_markers()  # cancel any PreToolUse timeout fallback
             set_status("running", "处理中")
 
     def run(self):

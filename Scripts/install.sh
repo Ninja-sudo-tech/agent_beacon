@@ -10,6 +10,9 @@ CLAUDE_NOTIFY="$PROJECT_DIR/Wrappers/agent-beacon-claude-notify"
 GEMINI_WATCHER="$PROJECT_DIR/Wrappers/agent-gemini-watcher"
 CLAUDE_WATCHER="$PROJECT_DIR/Wrappers/agent-claude-watcher"
 CODEX_WATCHER="$PROJECT_DIR/Wrappers/agent-codex-watcher"
+CLAUDE_PRETOOLUSE="$PROJECT_DIR/Wrappers/agent-beacon-claude-pretooluse"
+CLAUDE_POSTTOOLUSE="$PROJECT_DIR/Wrappers/agent-beacon-claude-posttooluse"
+CLAUDE_STOP="$PROJECT_DIR/Wrappers/agent-beacon-claude-stop"
 BIN_DIR="$HOME/.local/bin"
 
 echo "==> Agent Beacon Installer"
@@ -44,8 +47,13 @@ cp "$CLAUDE_NOTIFY"   "$BIN_DIR/agent-beacon-claude-notify"
 cp "$GEMINI_WATCHER"  "$BIN_DIR/agent-gemini-watcher"
 cp "$CLAUDE_WATCHER"  "$BIN_DIR/agent-claude-watcher"
 cp "$CODEX_WATCHER"   "$BIN_DIR/agent-codex-watcher"
+cp "$CLAUDE_PRETOOLUSE"  "$BIN_DIR/agent-beacon-claude-pretooluse"
+cp "$CLAUDE_POSTTOOLUSE" "$BIN_DIR/agent-beacon-claude-posttooluse"
+cp "$CLAUDE_STOP"        "$BIN_DIR/agent-beacon-claude-stop"
 chmod +x "$BIN_DIR/agent-beacon" "$BIN_DIR/agent-codex" "$BIN_DIR/agent-beacon-claude-notify" \
-         "$BIN_DIR/agent-gemini-watcher" "$BIN_DIR/agent-claude-watcher" "$BIN_DIR/agent-codex-watcher"
+         "$BIN_DIR/agent-gemini-watcher" "$BIN_DIR/agent-claude-watcher" "$BIN_DIR/agent-codex-watcher" \
+         "$BIN_DIR/agent-beacon-claude-pretooluse" "$BIN_DIR/agent-beacon-claude-posttooluse" \
+         "$BIN_DIR/agent-beacon-claude-stop"
 echo "    Done."
 if [[ ":$PATH:" != *":$BIN_DIR:"* ]]; then
     echo "    NOTE: $BIN_DIR is not on your PATH. Add to your shell profile:"

@@ -1,0 +1,74 @@
+#!/bin/bash
+# Agent Beacon — Claude Code PreToolUse hook
+#
+# Claude Code's "PermissionRequest" hook event never actually fires in
+# practice (confirmed empirically: 0 occurrences across 500+ real tool
+# calls in this user's session history, despite the event name existing
+# in the binary). So there is no reliable hook signal for "Claude is now
+# showing a confirmation dialog and waiting for the user". This script
+# combines two heuristics instead:
+#
+#   A) Timeout fallback: if PostToolUse doesn't follow within
+#      TIMEOUT_SECONDS, assume the tool is blocked on a confirmation
+#      dialog (most pre-approved tools complete in well under a second)
+#      and set waiting.
+#   B) Predictive pattern match: Bash commands containing syntax Claude
+#      Code's safety analyzer can't statically verify (heredocs, process
+#      substitution) reliably trigger a manual confirmation dialog —
+#      detect this directly from the command text and set waiting
+#      immediately, without waiting for the timeout.
+#
+# Both are imperfect (A risks false positives on slow-but-approved
+# commands; B only covers the specific patterns checked) but together
+# cover the common cases until/unless Claude Code ships a working
+# PermissionRequest-equivalent event.
+
+BEACON="$HOME/.local/bin/agent-beacon"
+PENDING_DIR="$HOME/.agent-beacon/claude-pending"
+TIMEOUT_SECONDS=4
+
+mkdir -p "$PENDING_DIR"
+
+INPUT=$(cat)
+
+# Single python3 call extracting both fields (minimize process spawns)
+EXTRACTED=$(echo "$INPUT" | python3 -c "
+import json, sys
+try:
+    d = json.load(sys.stdin)
+    print(d.get('tool_use_id', ''))
+    print(d.get('tool_input', {}).get('command', '').replace(chr(10), ' '))
+except Exception:
+    print('')
+    print('')
+" 2>/dev/null)
+
+TOOL_USE_ID=$(echo "$EXTRACTED" | sed -n '1p')
+COMMAND=$(echo "$EXTRACTED" | sed -n '2p')
+
+if [ -z "$TOOL_USE_ID" ]; then
+    exit 0
+fi
+
+MARKER="$PENDING_DIR/$TOOL_USE_ID"
+touch "$MARKER"
+
+# B) Predictive: heredoc (<<EOF, <<'EOF', <<-EOF) or process substitution (<(...), >(...))
+#    — these are the patterns Claude Code's "cannot be statically analyzed" check flags.
+if echo "$COMMAND" | grep -qE "<<[-~]?['\"]?[A-Za-z_]|[<>]\("; then
+    "$BEACON" set claude waiting '等待权限确认（命令含特殊语法）' >/dev/null 2>&1 &
+else
+    "$BEACON" set claude running '处理中' >/dev/null 2>&1 &
+fi
+
+# A) Timeout fallback — detached background process, survives this hook exiting
+(
+    sleep "$TIMEOUT_SECONDS"
+    if [ -f "$MARKER" ]; then
+        "$BEACON" set claude waiting '等待确认（执行较慢或需要授权）' >/dev/null 2>&1
+        rm -f "$MARKER"
+    fi
+) >/dev/null 2>&1 &
+disown -a 2>/dev/null
+
+exit 0

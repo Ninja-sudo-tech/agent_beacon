@@ -1,0 +1,25 @@
+#!/bin/bash
+# Agent Beacon — Claude Code PostToolUse hook
+# Clears the pending marker created by PreToolUse (cancels its timeout
+# fallback — the tool completed normally, no confirmation was needed,
+# or the confirmation was approved) and sets running.
+
+BEACON="$HOME/.local/bin/agent-beacon"
+PENDING_DIR="$HOME/.agent-beacon/claude-pending"
+
+INPUT=$(cat)
+TOOL_USE_ID=$(echo "$INPUT" | python3 -c "
+import json, sys
+try:
+    print(json.load(sys.stdin).get('tool_use_id', ''))
+except Exception:
+    print('')
+" 2>/dev/null)
+
+if [ -n "$TOOL_USE_ID" ]; then
+    rm -f "$PENDING_DIR/$TOOL_USE_ID"
+fi
+
+"$BEACON" set claude running '处理中' >/dev/null 2>&1 &
+
+exit 0

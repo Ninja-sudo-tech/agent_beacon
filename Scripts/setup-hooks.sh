@@ -26,8 +26,11 @@ else
 import json, sys
 
 path = "$CLAUDE_SETTINGS"
-beacon_cli = "$(which agent-beacon 2>/dev/null || echo '$HOME/.local/bin/agent-beacon')"
-notify_hook = "$(which agent-beacon-claude-notify 2>/dev/null || echo '$HOME/.local/bin/agent-beacon-claude-notify')"
+bin_dir = "$(dirname "$(which agent-beacon 2>/dev/null || echo "$HOME/.local/bin/agent-beacon")")"
+beacon_cli  = f"{bin_dir}/agent-beacon"
+pretooluse  = f"{bin_dir}/agent-beacon-claude-pretooluse"
+posttooluse = f"{bin_dir}/agent-beacon-claude-posttooluse"
+stop_hook   = f"{bin_dir}/agent-beacon-claude-stop"
 
 with open(path) as f:
     settings = json.load(f)
@@ -43,38 +46,32 @@ def add_hook(event, command_str, label):
     else:
         print(f"    {event} hook already present, skipped")
 
-# Background pattern: (cat>/dev/null; agent-beacon ...) &  — the hook shell
-# exits immediately so Claude doesn't wait on it (~100-200ms saved per call).
-# Used for everything except PermissionRequest (Claude is already paused for
-# user input, no latency cost to being synchronous) and Stop (last hook in
-# the turn — nothing waits on it, and synchronous execution avoids a race
-# where a background write lands after the watcher's next poll, which can
-# leave the light stuck on the wrong color).
 def bg(cmd):
+    # Hook shell exits immediately so Claude doesn't wait on it.
     return f"(cat>/dev/null; {cmd} 2>/dev/null) &"
-
-def sync(cmd):
-    return f"{cmd} 2>/dev/null; cat>/dev/null"
 
 # running when user submits a prompt
 add_hook("UserPromptSubmit",
          bg(f"{beacon_cli} set claude running '处理中'"),
          "running")
 
-# waiting when Claude needs permission to run a tool (dedicated hook event)
-add_hook("PermissionRequest",
-         sync(f"{beacon_cli} set claude waiting '等待权限确认'"),
-         "waiting — permission dialog")
+# NOTE: Claude Code's "PermissionRequest" hook event is documented-sounding
+# but was confirmed empirically to never actually fire (0 occurrences across
+# 500+ real tool calls in session history). PreToolUse/PostToolUse below
+# implement a heuristic replacement instead: predict from the command text
+# (heredocs etc. reliably trigger Claude's own confirmation dialog) and fall
+# back to a timeout if a tool doesn't complete quickly. See
+# agent-beacon-claude-pretooluse for the full explanation.
+add_hook("PreToolUse", pretooluse,
+         "running, or waiting if predicted / after timeout — see script")
+add_hook("PostToolUse", posttooluse,
+         "running — resumed after tool, cancels PreToolUse's timeout")
 
-# running again once a tool finishes (resumes after a permission approval)
-add_hook("PostToolUse",
-         bg(f"{beacon_cli} set claude running '处理中'"),
-         "running — resumed after tool/permission")
-
-# done when session stops — synchronous, see comment above
-add_hook("Stop",
-         sync(f"{beacon_cli} set claude done '已完成'"),
-         "done")
+# done when session stops — synchronous (last hook in the turn, nothing
+# waits on it; sync avoids a race with the watcher's next poll) and also
+# clears any leftover PreToolUse pending markers (handles tool denial,
+# where PostToolUse never fires to cancel the timeout itself).
+add_hook("Stop", stop_hook, "done")
 
 
 with open(path, "w") as f:

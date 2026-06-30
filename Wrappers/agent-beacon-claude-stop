@@ -1,0 +1,11 @@
+#!/bin/bash
+# Agent Beacon — Claude Code Stop hook
+# Clears any leftover PreToolUse pending markers (the turn is over, so
+# nothing should still be "pending" — handles the case where a tool was
+# denied and PostToolUse never fired to clear its marker) and sets done.
+
+rm -rf "$HOME/.agent-beacon/claude-pending" 2>/dev/null
+
+"$HOME/.local/bin/agent-beacon" set claude done '已完成' 2>/dev/null
+cat >/dev/null
+exit 0
